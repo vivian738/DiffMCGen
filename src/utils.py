@@ -2,6 +2,12 @@ import os
 import torch_geometric.utils
 from omegaconf import OmegaConf, open_dict
 from torch_geometric.utils import to_dense_adj, to_dense_batch
+from copy import deepcopy
+from typing import Optional, Union, Dict, Any
+import lightning.pytorch as pl
+from lightning.pytorch import Callback
+from overrides import overrides
+from lightning.pytorch.utilities import rank_zero_only
 import torch
 import omegaconf
 import wandb
@@ -50,7 +56,7 @@ def unnormalize(X, E, y, norm_values, norm_biases, node_mask, collapse=False):
     return PlaceHolder(X=X, E=E, y=y).mask(node_mask, collapse)
 
 
-def to_dense(x, edge_index, edge_attr, batch):
+def to_dense(x, edge_index, edge_attr, batch, y):
     X, node_mask = to_dense_batch(x=x, batch=batch)
     # node_mask = node_mask.float()
     edge_index, edge_attr = torch_geometric.utils.remove_self_loops(edge_index, edge_attr)
@@ -59,7 +65,13 @@ def to_dense(x, edge_index, edge_attr, batch):
     E = to_dense_adj(edge_index=edge_index, batch=batch, edge_attr=edge_attr, max_num_nodes=max_num_nodes)
     E = encode_no_edge(E)
 
-    return PlaceHolder(X=X, E=E, y=None), node_mask
+    edge_mask = node_mask.unsqueeze(1) * node_mask.unsqueeze(2)
+    diag_mask = ~torch.eye(edge_mask.size(1), dtype=torch.bool).unsqueeze(0)
+    edge_mask *= diag_mask
+    edge_mask = edge_mask.reshape(-1, 1)
+    # y = torch.stack(y, dim=0)
+
+    return PlaceHolder(X=X, E=E, y=y), node_mask, edge_mask
 
 
 def encode_no_edge(E):
@@ -133,7 +145,41 @@ class PlaceHolder:
 
 def setup_wandb(cfg):
     config_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    kwargs = {'name': cfg.general.name, 'project': f'graph_ddm_{cfg.dataset.name}', 'config': config_dict,
-              'settings': wandb.Settings(_disable_stats=True), 'reinit': True, 'mode': cfg.general.wandb}
+    kwargs = {'name': cfg.general.name, 'project': f'graph_ddm_{cfg.dataset.name}', 'entity': 'vicky863',
+              'config': config_dict, 'settings': wandb.Settings(_disable_stats=True), 'reinit': True,
+              'mode': cfg.general.wandb}
     wandb.init(**kwargs)
     wandb.save('*.txt')
+
+def prepare_context(conditioning, minibatch, property_norms):
+    # batch_size = minibatch['batch'][-1] + 1
+    context_node_nf = 0
+    context_list = []
+    for key in conditioning:
+        properties = minibatch[key]
+        properties = (properties - property_norms[key]['mean']) / property_norms[key]['mad']
+        if len(properties.size()) == 1:
+            # Global feature.
+            # assert properties.size() == (batch_size,)
+            properties = properties.index_select(0, minibatch['batch'])
+            context_list.append(properties.unsqueeze(1))
+            context_node_nf += 1
+        elif len(properties.size()) == 2 or len(properties.size()) == 3:
+            # Node feature.
+            # assert properties.size(0) == batch_size
+
+            context_key = properties
+
+            # Inflate if necessary.
+            if len(properties.size()) == 2:
+                context_key = context_key.unsqueeze(2)
+
+            context_list.append(context_key)
+            context_node_nf += context_key.size(2)
+        else:
+            raise ValueError('Invalid tensor size, more than 3 axes.')
+    # Concatenate
+    context = torch.cat(context_list, dim=1)
+    # Mask disabled nodes!
+    assert context.size(1) == context_node_nf
+    return context

@@ -4,7 +4,7 @@ import time
 import torch
 import torch.nn as nn
 import numpy as np
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 import wandb
 
 from models.transformer_model import GraphTransformer
@@ -87,8 +87,8 @@ class LiftedDenoisingDiffusion(pl.LightningModule):
         self.val_counter = 0
 
     def training_step(self, data, i):
-        dense_data, node_mask = utils.to_dense(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr,
-                                               batch=data.batch)
+        dense_data, node_mask, edge_mask = utils.to_dense(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr,
+                                               batch=data.batch, y=data.y)
         dense_data = dense_data.mask(node_mask)
         X, E = dense_data.X, dense_data.E
         normalized_data = utils.normalize(X, E, data.y, self.norm_values, self.norm_biases, node_mask)
@@ -147,8 +147,8 @@ class LiftedDenoisingDiffusion(pl.LightningModule):
         self.val_y_logp.reset()
 
     def validation_step(self, data, i):
-        dense_data, node_mask = utils.to_dense(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr,
-                                               batch=data.batch)
+        dense_data, node_mask, edge_mask = utils.to_dense(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr,
+                                               batch=data.batch, y=data.y)
         dense_data = dense_data.mask(node_mask)
         X, E = dense_data.X, dense_data.E
         normalized_data = utils.normalize(X, E, data.y, self.norm_values, self.norm_biases, node_mask)
@@ -231,8 +231,8 @@ class LiftedDenoisingDiffusion(pl.LightningModule):
             utils.setup_wandb(self.cfg)
 
     def test_step(self, data, i):
-        dense_data, node_mask = utils.to_dense(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr,
-                                               batch=data.batch)
+        dense_data, node_mask, edge_mask = utils.to_dense(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr,
+                                               batch=data.batch, y=data.y)
         dense_data = dense_data.mask(node_mask)
         X, E = dense_data.X, dense_data.E
         normalized_data = utils.normalize(X, E, data.y, self.norm_values, self.norm_biases, node_mask)

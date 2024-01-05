@@ -125,7 +125,7 @@ class MOSESDataset(InMemoryDataset):
 
             if self.filter_dataset:
                 # Try to build the molecule again from the graph. If it fails, do not add it to the training set
-                dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch)
+                dense_data, node_mask, edge_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
                 dense_data = dense_data.mask(node_mask, collapse=True)
                 X, E = dense_data.X, dense_data.E
 
@@ -255,7 +255,7 @@ def get_train_smiles(cfg, datamodule, dataset_infos, evaluate_dataset=False):
         train_dataloader = datamodule.dataloaders['train']
         all_molecules = []
         for i, data in enumerate(tqdm(train_dataloader)):
-            dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch)
+            dense_data, node_mask, edge_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
             dense_data = dense_data.mask(node_mask, collapse=True)
             X, E = dense_data.X, dense_data.E
 

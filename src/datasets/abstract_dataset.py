@@ -1,7 +1,7 @@
-from src.diffusion.distributions import DistributionNodes
+from src.diffusion.distributions import DistributionNodes, DistributionProperty
 import src.utils as utils
 import torch
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 from torch_geometric.loader import DataLoader
 from torch_geometric.data.lightning import LightningDataset
 
@@ -98,12 +98,13 @@ class AbstractDatasetInfos:
         self.num_classes = len(node_types)
         self.max_n_nodes = len(n_nodes) - 1
         self.nodes_dist = DistributionNodes(n_nodes)
+        # self.prop_dist = DistributionProperty(train_ds, prop2idx_sub, normalizer=prop_norms)
 
     def compute_input_output_dims(self, datamodule, extra_features, domain_features):
         example_batch = next(iter(datamodule.train_dataloader()))
-        ex_dense, node_mask = utils.to_dense(example_batch.x, example_batch.edge_index, example_batch.edge_attr,
-                                             example_batch.batch)
-        example_data = {'X_t': ex_dense.X, 'E_t': ex_dense.E, 'y_t': example_batch['y'], 'node_mask': node_mask}
+        ex_dense, node_mask, edge_mask = utils.to_dense(example_batch.x, example_batch.edge_index, example_batch.edge_attr,
+                                             example_batch.batch, example_batch.y)
+        example_data = {'X_t': ex_dense.X, 'E_t': ex_dense.E, 'y_t': example_batch['y'], 'node_mask': node_mask, 'edge_mask':edge_mask}
 
         self.input_dims = {'X': example_batch['x'].size(1),
                            'E': example_batch['edge_attr'].size(1),
@@ -120,4 +121,4 @@ class AbstractDatasetInfos:
 
         self.output_dims = {'X': example_batch['x'].size(1),
                             'E': example_batch['edge_attr'].size(1),
-                            'y': 0}
+                            'y': example_batch['y'].size(1) + 1}

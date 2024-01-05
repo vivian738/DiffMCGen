@@ -11,6 +11,6 @@ train:
     save_model: True
 model:
     n_layers: 7
-    lambda_train: [5, 0]
+    lambda_train: [5, 10]
 dataset:
     remove_h: False

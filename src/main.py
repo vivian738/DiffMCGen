@@ -7,9 +7,9 @@ import torch
 torch.cuda.empty_cache()
 import hydra
 from omegaconf import DictConfig
-from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.utilities.warnings import PossibleUserWarning
+from lightning.pytorch import Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.utilities.warnings import PossibleUserWarning
 
 from src import utils
 from metrics.abstract_metrics import TrainAbstractMetricsDiscrete, TrainAbstractMetrics
@@ -18,8 +18,12 @@ from diffusion_model import LiftedDenoisingDiffusion
 from diffusion_model_discrete import DiscreteDenoisingDiffusion
 from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
 
-
 warnings.filterwarnings("ignore", category=PossibleUserWarning)
+
+os.environ["NCCL_DEBUG"] = "INFO"
+os.environ['NCCL_DEBUG_SUBSYS'] = 'COLL'
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ['HYDRA_FULL_ERROR']='1'
 
 
 def get_resume(cfg, model_kwargs):
@@ -135,6 +139,7 @@ def main(cfg: DictConfig):
         dataset_infos.compute_input_output_dims(datamodule=datamodule, extra_features=extra_features,
                                                 domain_features=domain_features)
 
+
         if cfg.model.type == 'discrete':
             train_metrics = TrainMolecularMetricsDiscrete(dataset_infos)
         else:
@@ -143,10 +148,19 @@ def main(cfg: DictConfig):
         # We do not evaluate novelty during training
         sampling_metrics = SamplingMolecularMetrics(dataset_infos, train_smiles)
         visualization_tools = MolecularVisualization(cfg.dataset.remove_h, dataset_infos=dataset_infos)
+        prop2idx_sub = {
+            cfg.model.context[0]: dataset_infos.prop2idx[cfg.model.context[0]],
+            cfg.model.context[1]: dataset_infos.prop2idx[cfg.model.context[1]],
+            cfg.model.context[2]: dataset_infos.prop2idx[cfg.model.context[2]],
+            cfg.model.context[3]: dataset_infos.prop2idx[cfg.model.context[3]]
+        }
+        prop_norms = datamodule.train_dataset.compute_property_mean_mad(prop2idx_sub)
+        prop_norms_val = datamodule.val_dataset.compute_property_mean_mad(prop2idx_sub)
 
         model_kwargs = {'dataset_infos': dataset_infos, 'train_metrics': train_metrics,
                         'sampling_metrics': sampling_metrics, 'visualization_tools': visualization_tools,
-                        'extra_features': extra_features, 'domain_features': domain_features}
+                        'extra_features': extra_features, 'domain_features': domain_features,
+                        'property_norms': prop_norms, 'property_norms_val': prop_norms_val}
     else:
         raise NotImplementedError("Unknown dataset {}".format(cfg["dataset"]))
 
@@ -178,9 +192,9 @@ def main(cfg: DictConfig):
         callbacks.append(last_ckpt_save)
         callbacks.append(checkpoint_callback)
 
-    if cfg.train.ema_decay > 0:
-        ema_callback = utils.EMA(decay=cfg.train.ema_decay)
-        callbacks.append(ema_callback)
+    # if cfg.train.ema_decay > 0:
+    #     ema_callback = utils.EMACallback(decay=cfg.train.ema_decay)
+    #     callbacks.append(ema_callback)
 
     name = cfg.general.name
     if name == 'debug':
@@ -188,16 +202,18 @@ def main(cfg: DictConfig):
 
     use_gpu = cfg.general.gpus > 0 and torch.cuda.is_available()
     trainer = Trainer(gradient_clip_val=cfg.train.clip_grad,
-                      strategy="ddp_find_unused_parameters_true",  # Needed to load old checkpoints
+                      strategy="ddp",  # Needed to load old checkpoints: ddp_find_unused_parameters_true
                       accelerator='gpu' if use_gpu else 'cpu',
                       devices=cfg.general.gpus if use_gpu else 1,
                       max_epochs=cfg.train.n_epochs,
                       check_val_every_n_epoch=cfg.general.check_val_every_n_epochs,
-                      fast_dev_run=cfg.general.name == 'debug',
+                      fast_dev_run=True,  # debug: True-every process circulate 5 times, int-circulate {int} times
                       enable_progress_bar=False,
                       callbacks=callbacks,
                       log_every_n_steps=50 if name != 'debug' else 1,
-                      logger = [])
+                      logger=[],
+                      accumulate_grad_batches=1,
+                      overfit_batches=0.01)
 
     if not cfg.general.test_only:
         trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.general.resume)
