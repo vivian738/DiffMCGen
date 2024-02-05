@@ -10,7 +10,8 @@ import numpy as np
 import rdkit.Chem
 import wandb
 import matplotlib.pyplot as plt
-
+from sklearn.decomposition import PCA
+import torch
 
 
 
@@ -20,7 +21,7 @@ class MolecularVisualization:
         self.remove_h = remove_h
         self.dataset_infos = dataset_infos
 
-    def mol_from_graphs(self, node_list, adjacency_matrix):
+    def mol_from_graphs(self, node_list, adjacency_matrix, positions):
         """
         Convert graphs to rdkit molecules
         node_list: the nodes of a batch of nodes (bs x n)
@@ -63,6 +64,13 @@ class MolecularVisualization:
         except rdkit.Chem.KekulizeException:
             print("Can't kekulize molecule")
             mol = None
+
+        # Set coordinates
+        # positions = positions.double()
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        for i in range(mol.GetNumAtoms()):
+            conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
+        mol.AddConformer(conf)
         return mol
 
     def visualize(self, path: str, molecules: list, num_molecules_to_visualize: int, log='graph'):
@@ -78,7 +86,7 @@ class MolecularVisualization:
         
         for i in range(num_molecules_to_visualize):
             file_path = os.path.join(path, 'molecule_{}.png'.format(i))
-            mol = self.mol_from_graphs(molecules[i][0].numpy(), molecules[i][1].numpy())
+            mol = self.mol_from_graphs(molecules[i][0].numpy(), molecules[i][1].numpy(), molecules[i][2].numpy())
             try:
                 Draw.MolToFile(mol, file_path)
                 if wandb.run and log is not None:
@@ -88,10 +96,10 @@ class MolecularVisualization:
                 print("Can't kekulize molecule")
 
 
-    def visualize_chain(self, path, nodes_list, adjacency_matrix, trainer=None):
+    def visualize_chain(self, path, nodes_list, adjacency_matrix, positions, trainer=None):
         RDLogger.DisableLog('rdApp.*')
         # convert graphs to the rdkit molecules
-        mols = [self.mol_from_graphs(nodes_list[i], adjacency_matrix[i]) for i in range(nodes_list.shape[0])]
+        mols = [self.mol_from_graphs(nodes_list[i], adjacency_matrix[i], positions[i]) for i in range(nodes_list.shape[0])]
 
         # find the coordinates of atoms in the final molecule
         final_molecule = mols[-1]
@@ -101,6 +109,7 @@ class MolecularVisualization:
         for i, atom in enumerate(final_molecule.GetAtoms()):
             positions = final_molecule.GetConformer().GetAtomPosition(i)
             coords.append((positions.x, positions.y, positions.z))
+        conformer2d = torch.Tensor(coords)
 
         # align all the molecules
         for i, mol in enumerate(mols):

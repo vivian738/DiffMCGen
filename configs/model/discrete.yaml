@@ -16,7 +16,7 @@ hidden_mlp_dims: {'X': 256, 'E': 128, 'y': 128}
 # The dimensions should satisfy dx % n_head == 0
 hidden_dims : {'dx': 256, 'de': 64, 'dy': 64, 'n_head': 8, 'dim_ffX': 256, 'dim_ffE': 128, 'dim_ffy': 128}
 
-lambda_train: [5, 10]
+lambda_train: [0.0738, 0.2828, 0.6434]
 
 # EGNNSparseNetwork
 train: True
@@ -32,5 +32,4 @@ smooth_conv: False
 beta_schedule: 'sigmoid'
 beta_start: 1.e-7
 beta_end: 2.e-3
-num_diffusion_timesteps: 1000
 context: ['gap', 'pharma_score', 'SA', 'QED']

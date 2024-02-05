@@ -2,12 +2,7 @@ import os
 import torch_geometric.utils
 from omegaconf import OmegaConf, open_dict
 from torch_geometric.utils import to_dense_adj, to_dense_batch
-from copy import deepcopy
-from typing import Optional, Union, Dict, Any
-import lightning.pytorch as pl
-from lightning.pytorch import Callback
-from overrides import overrides
-from lightning.pytorch.utilities import rank_zero_only
+from torch_scatter import scatter_add, scatter_mean
 import torch
 import omegaconf
 import wandb
@@ -64,14 +59,9 @@ def to_dense(x, edge_index, edge_attr, batch, y):
     max_num_nodes = X.size(1)
     E = to_dense_adj(edge_index=edge_index, batch=batch, edge_attr=edge_attr, max_num_nodes=max_num_nodes)
     E = encode_no_edge(E)
-
-    edge_mask = node_mask.unsqueeze(1) * node_mask.unsqueeze(2)
-    diag_mask = ~torch.eye(edge_mask.size(1), dtype=torch.bool).unsqueeze(0)
-    edge_mask *= diag_mask
-    edge_mask = edge_mask.reshape(-1, 1)
     # y = torch.stack(y, dim=0)
 
-    return PlaceHolder(X=X, E=E, y=y), node_mask, edge_mask
+    return PlaceHolder(X=X, E=E, y=y), node_mask
 
 
 def encode_no_edge(E):
@@ -129,6 +119,8 @@ class PlaceHolder:
         x_mask = node_mask.unsqueeze(-1)          # bs, n, 1
         e_mask1 = x_mask.unsqueeze(2)             # bs, n, 1, 1
         e_mask2 = x_mask.unsqueeze(1)             # bs, 1, n, 1
+        diag_mask = ~torch.eye(node_mask.shape[1], dtype=torch.bool,
+                               device=node_mask.device).unsqueeze(0).expand(node_mask.shape[0], -1, -1).unsqueeze(-1)  # bs, n, n, 1
 
         if collapse:
             self.X = torch.argmax(self.X, dim=-1)
@@ -138,7 +130,7 @@ class PlaceHolder:
             self.E[(e_mask1 * e_mask2).squeeze(-1) == 0] = - 1
         else:
             self.X = self.X * x_mask
-            self.E = self.E * e_mask1 * e_mask2
+            self.E = self.E * e_mask1 * e_mask2 * diag_mask
             assert torch.allclose(self.E, torch.transpose(self.E, 1, 2))
         return self
 
@@ -155,8 +147,8 @@ def prepare_context(conditioning, minibatch, property_norms):
     # batch_size = minibatch['batch'][-1] + 1
     context_node_nf = 0
     context_list = []
-    for key in conditioning:
-        properties = minibatch[key]
+    for i, key in enumerate(conditioning):
+        properties = minibatch.y[..., i]
         properties = (properties - property_norms[key]['mean']) / property_norms[key]['mad']
         if len(properties.size()) == 1:
             # Global feature.
@@ -183,3 +175,31 @@ def prepare_context(conditioning, minibatch, property_norms):
     # Mask disabled nodes!
     assert context.size(1) == context_node_nf
     return context
+
+
+def remove_mean_with_mask(x, node_mask):
+    """ x: bs x n x d.
+        node_mask: bs x n """
+    assert node_mask.dtype == torch.bool, f"Wrong type {node_mask.dtype}"
+    node_mask = node_mask.unsqueeze(-1)
+    masked_max_abs_value = (x * (~node_mask)).abs().sum().item()
+    assert masked_max_abs_value < 1e-5, f'Error {masked_max_abs_value} too high'
+    N = node_mask.sum(1, keepdims=True)
+
+    mean = torch.sum(x, dim=1, keepdim=True) / N
+    x = x - mean * node_mask
+    return x
+
+
+def center_pos(pos, batch):
+    pos_center = pos - scatter_mean(pos, batch, dim=0)[batch]
+    return pos_center
+
+
+def padding(data_list, max_nodes):
+    padding_list = []
+    for data in data_list:
+        if data.size(0)<max_nodes:
+            padding_data = torch.cat([data,torch.zeros(max_nodes-data.size(0), data.size(1)).to(data.device)],dim=0)
+        padding_list.append(padding_data)
+    return torch.stack(padding_list)

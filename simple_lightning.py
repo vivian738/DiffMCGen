@@ -1,7 +1,8 @@
 # main.py
 # ! pip install torchvision
 import torch, torch.nn as nn, torch.utils.data as data, torchvision as tv, torch.nn.functional as F
-import lightning as L
+import pytorch_lightning as L
+import os
 
 # --------------------------------
 # Step 1: Define a LightningModule
@@ -9,7 +10,7 @@ import lightning as L
 # A LightningModule (nn.Module subclass) defines a full *system*
 # (ie: an LLM, diffusion model, autoencoder, or simple image classifier).
 
-
+os.environ['NCCL_P2P_DISABLE']='1'
 class LitAutoEncoder(L.LightningModule):
     def __init__(self):
         super().__init__()

@@ -4,8 +4,9 @@ from src.models.egnn import EGNNSparseNetwork
 from src.diffusion.edge import (get_edge_encoder, MultiLayerPerceptron, _extend_to_radius_graph,
                                 assemble_atom_pair_feature)
 from src.diffusion.diffusion_utils import get_timestep_embedding, get_beta_schedule
-from src.diffusion.schnet import SchNetEncoder
-from torch_scatter import scatter_add, scatter_mean
+from src.metrics.train_metrics import get_distance, is_radius_edge
+from torch_scatter import scatter_mean
+from src.metrics.train_metrics import eq_transform
 
 
 class SinusoidalPosEmb(torch.nn.Module):
@@ -30,7 +31,7 @@ class GlobalEdgeEGNN(torch.nn.Module):
         self.edge_encoder_global = get_edge_encoder(cfg)
         self.training = cfg.model.train
         self.context = cfg.model.context
-        self.atom_type_input_dim = cfg.model.num_atom
+        self.atom_type_input_dim = cfg.model.num_atom #contains simple tmb or charge or not qm9:5+1(charge) geom: 16+1(charge
         self.num_convs = cfg.model.num_convs
         self.hidden_dim = cfg.model.hidden_dim
         self.atom_out_dim = cfg.model.num_atom  # contains charge or not
@@ -38,6 +39,24 @@ class GlobalEdgeEGNN(torch.nn.Module):
         self.norm_coors = cfg.model.norm_coors
         self.time_emb = True
         self.cutoff=cfg.model.cutoff
+
+        '''
+                timestep embedding
+                '''
+        if self.time_emb:
+            self.temb = torch.nn.Module()
+            self.temb.dense = torch.nn.ModuleList([
+                torch.nn.Linear(self.hidden_dim,
+                                self.hidden_dim * 4),
+                torch.nn.Linear(self.hidden_dim * 4,
+                                self.hidden_dim * 4),
+            ])
+            self.temb_proj = torch.nn.Linear(self.hidden_dim * 4,
+                                             self.hidden_dim)
+        if self.context is not None:
+            ctx_nf = len(self.context)
+            self.atom_type_input_dim = self.atom_type_input_dim + ctx_nf
+
         self.encoder_global = EGNNSparseNetwork(
             n_layers=self.num_convs,
             feats_input_dim=self.atom_type_input_dim,
@@ -47,31 +66,6 @@ class GlobalEdgeEGNN(torch.nn.Module):
             soft_edge=self.soft_edge,
             norm_coors=self.norm_coors
         )
-
-        self.context_encoder = SchNetEncoder(
-            hidden_channels=cfg.model.hidden_dim,
-            num_filters=cfg.model.hidden_dim,
-            num_interactions=cfg.model.num_convs,
-            edge_channels=self.edge_encoder_global.out_channels,
-            cutoff=10,  # config.cutoff
-            smooth=cfg.model.smooth_conv,
-            input_dim=self.atom_type_input_dim,
-            time_emb=False,
-            context=True
-        )
-        self.atom_type_input_dim = self.atom_type_input_dim * 2
-        ctx_nf = len(self.context)
-        self.atom_type_input_dim = self.atom_type_input_dim + ctx_nf
-
-        self.temb = torch.nn.Module()
-        self.temb.dense = torch.nn.ModuleList([
-            torch.nn.Linear(cfg.model.hidden_dim,
-                            cfg.model.hidden_dim * 4),
-            torch.nn.Linear(cfg.model.hidden_dim * 4,
-                            cfg.model.hidden_dim * 4),
-        ])
-        self.temb_proj = torch.nn.Linear(cfg.model.hidden_dim * 4,
-                                         cfg.model.hidden_dim)
 
         self.grad_global_dist_mlp = MultiLayerPerceptron(
             2 * cfg.model.hidden_dim,
@@ -98,27 +92,14 @@ class GlobalEdgeEGNN(torch.nn.Module):
         self.alphas = torch.nn.Parameter(alphas, requires_grad=False)
         self.num_timesteps = self.betas.size(0)
 
-    def net(self, atom_type, pos, bond_index, bond_type, batch, time_step,
-                edge_type=None, edge_index=None, edge_length=None, context=None, vae_noise=None):
-        if self.training:
-            edge_length = get_distance(pos, bond_index).unsqueeze(-1)
-            m, log_var = self.context_encoder(
-                z=atom_type,
-                edge_index=bond_index,
-                edge_length=edge_length,
-                edge_attr=None,
-                embed_node=False  # default is True
-            )
-            std = torch.exp(log_var * 0.5)
-            z = torch.randn_like(log_var)
-            ctx = m + std * z
-            atom_type = torch.cat([atom_type, ctx], dim=1)
-            kl_loss = 0.5 * torch.sum(torch.exp(log_var) + m ** 2 - 1. - log_var)
+        self.sigmas = ((1.0 - self.alphas).sqrt() / self.alphas.sqrt())
 
-        else:
-            ctx = vae_noise
-            atom_type = torch.cat([atom_type, ctx], dim=1)
-            kl_loss = 0
+    def forward(self, atom_type, pos, bond_index, batch, time_step,
+                edge_type=None, edge_index=None, edge_length=None, context=None):
+        if not self.time_emb:
+            time_step = time_step / self.num_timesteps
+            time_emb = time_step.index_select(0, batch).unsqueeze(1)
+            atom_type = torch.cat([atom_type, time_emb], dim=1)
 
         if len(self.context) > 0 and self.context is not None:
             atom_type = torch.cat([atom_type, context], dim=1)
@@ -178,13 +159,12 @@ class GlobalEdgeEGNN(torch.nn.Module):
         dist_score_global = self.grad_global_dist_mlp(h_pair_global)  # (E_global, 1)
         node_score_global = self.grad_global_node_mlp(node_attr_global)
 
-        return dist_score_global, node_score_global, edge_index, edge_type, edge_length, local_edge_mask, kl_loss
+        return dist_score_global, node_score_global, edge_index, edge_type, edge_length, local_edge_mask
 
-    def forward(self, batch, context=None, is_sidechain=None):
+    def egn_process(self, batch):
         atom_type = batch.atom_feat_full.float()
         pos = batch.pos
         bond_index = batch.edge_index
-        bond_type = batch.edge_type
         batch = batch.batch
 
         # N = atom_type.size(0)
@@ -218,76 +198,103 @@ class GlobalEdgeEGNN(torch.nn.Module):
         atom_type = torch.cat([atom_type[:, :-1] / 4, atom_type[:, -1:] / 10], dim=1)
         atom_perturbed = a_pos.sqrt() * atom_type + (1.0 - a_pos).sqrt() * atom_noise
 
-        vae_noise = torch.randn_like(atom_type)  # N(0,1)
-        # vae_noise = torch.clamp(torch.randn_like(atom_type), min=-3, max=3) # clip N(0,1)
-        # vae_noise = torch.normal(0,3,size=(atom_type.size())).to(atom_type.device) # N(0,3)
-        # vae_noise = torch.zeros_like(atom_type).uniform_(-1,+1) # U(-1,1)
-        net_out = self.net(
-            atom_type=atom_perturbed,
-            pos=pos_perturbed,
-            bond_index=bond_index,
-            bond_type=bond_type,
-            batch=batch,
-            time_step=time_step,
-            context=context,
-            vae_noise=vae_noise
-        )  # (E_global, 1), (E_local, 1)
-        dist_score_global, node_score_global, edge_index, _, edge_length, local_edge_mask = net_out[:-1]
-        edge2graph = node2graph.index_select(0, edge_index[0])
+        return atom_perturbed, pos_perturbed, bond_index, batch, time_step, a, pos, node2graph, atom_noise
 
-        # Compute sigmas_edge
-        a_edge = a.index_select(0, edge2graph).unsqueeze(-1)  # (E, 1)
+    def sampled_dynamics_pos_atom(self, edge_inv_global, node_score_global, edge_index, edge_length, local_edge_mask,
+                                  atom_type, pos, batch, t, i, j, w_global_pos=1, w_global_node=0.5, step_lr=1e-6):
+        def compute_alpha(beta, t):
+            beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
+            a = (1 - beta).cumprod(dim=0).index_select(0, t + 1)  # .view(-1, 1, 1, 1)
+            return a
 
-        # Compute original and perturbed distances
-        d_gt = get_distance(pos, edge_index).unsqueeze(-1)  # (E, 1)
-        d_perturbed = edge_length
+            # Global
 
-        train_edge_mask = is_train_edge(edge_index, is_sidechain)
-        d_perturbed = torch.where(train_edge_mask.unsqueeze(-1), d_perturbed, d_gt)
+        self.sigmas = self.sigmas.to(i.device)
+        if self.sigmas[i] < 0.5:
+            edge_inv_global = edge_inv_global * (1 - local_edge_mask.view(-1, 1).float())
+            node_eq_global = eq_transform(edge_inv_global, pos, edge_index, edge_length)
+            node_eq_global = clip_norm(node_eq_global, limit=1000.0)
+        else:
+            node_eq_global = 0
+            node_score_global = 0
+            # Sum
+        eps_pos = w_global_pos * node_eq_global  # + eps_pos_reg * w_reg
+        eps_node = w_global_node * node_score_global
 
-        if self.config.edge_encoder == 'gaussian':
-            # Distances must be greater than 0
-            d_sgn = torch.sign(d_perturbed)
-            d_perturbed = torch.clamp(d_perturbed * d_sgn, min=0.01, max=float('inf'))
+        # Update
 
-        d_target = (d_gt - d_perturbed) / (1.0 - a_edge).sqrt() * a_edge.sqrt()  # (E_global, 1), denoising direction
+        sampling_type = 'ddpm_noisy'  # types: generalized, ddpm_noisy, ld
 
-        global_mask = torch.logical_and(
-            torch.logical_or(torch.logical_and(d_perturbed > self.cutoff, d_perturbed <= 10),
-                             local_edge_mask.unsqueeze(-1)),
-            ~local_edge_mask.unsqueeze(-1)
-        )
+        noise = center_pos(torch.randn_like(pos) + torch.randn_like(pos), batch)
+        noise_node = torch.randn_like(atom_type) + torch.randn_like(atom_type)
+        # center_pos(torch.randn_like(pos), batch)
+        b = self.betas
+        t = t[0]
+        next_t = torch.ones(1).to(b.device) * j
+        at = compute_alpha(b, t.long())
+        at_next = compute_alpha(b, next_t.long())
 
-        edge_inv_global = torch.where(global_mask, dist_score_global, torch.zeros_like(dist_score_global))
-        node_eq_global = eq_transform(edge_inv_global, pos_perturbed, edge_index, edge_length)
+        if sampling_type == 'generalized':
+            eta = 1.0
+            et = -eps_pos
 
-        # global pos
-        target_d_global = torch.where(global_mask, d_target, torch.zeros_like(d_target))
-        target_pos_global = eq_transform(target_d_global, pos_perturbed, edge_index, edge_length)
-        loss_global = (node_eq_global - target_pos_global) ** 2
-        loss_global = 1 * torch.sum(loss_global, dim=-1, keepdim=True)
+            c1 = eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
+            c2 = ((1 - at_next) - c1 ** 2).sqrt()
 
-        loss_node_global = (node_score_global - atom_noise) ** 2
-        loss_node_global = 1 * torch.sum(loss_node_global, dim=-1, keepdim=True)
+            step_size_pos_ld = step_lr * (self.sigmas[i] / 0.01) ** 2 / self.sigmas[i]
+            step_size_pos_generalized = 1 * ((1 - at).sqrt() / at.sqrt() - c2 / at_next.sqrt())
+            step_size_pos = step_size_pos_ld if step_size_pos_ld < step_size_pos_generalized \
+                else step_size_pos_generalized
 
-        # loss for atomic eps regression
+            step_size_noise_ld = torch.sqrt((step_lr * (self.sigmas[i] / 0.01) ** 2) * 2)
+            step_size_noise_generalized = 10 * (c1 / at_next.sqrt())
+            step_size_noise = step_size_noise_ld if step_size_noise_ld < step_size_noise_generalized \
+                else step_size_noise_generalized
 
-        vae_kl_loss = net_out[-1]
-        loss = loss_global + loss_node_global + vae_kl_loss
+            w = 1
 
-        return loss
+            pos_next = pos - et * step_size_pos + w * noise * step_size_noise
+            atom_next = atom_type - eps_node * step_size_pos + w * noise_node * step_size_noise
+        elif sampling_type == 'ddpm_noisy':
+            atm1 = at_next
+            beta_t = 1 - at / atm1
+            e = -eps_pos
 
-def get_distance(pos, edge_index):
-    return (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1)
+            mean = (pos - beta_t * e) / (1 - beta_t).sqrt()
+            mask = 1 - (t == 0).float()
+            logvar = beta_t.log()
+            pos_next = mean + mask * torch.exp(
+                0.5 * logvar) * noise  # torch.exp(0.5 * logvar) = σ pos_next = μ+z*σ
 
+            e = eps_node
+            node0_from_e = (1.0 / at).sqrt() * atom_type - (1.0 / at - 1).sqrt() * e
+            mean_eps = (
+                               (atm1.sqrt() * beta_t) * node0_from_e + (
+                               (1 - beta_t).sqrt() * (1 - atm1)) * atom_type
+                       ) / (1.0 - at)
+            mean = mean_eps
+            mask = 1 - (t == 0).float()
+            logvar = beta_t.log()
+            atom_next = mean + mask * torch.exp(
+                0.5 * logvar) * noise_node  # torch.exp(0.5 * logvar) = σ pos_next = μ+z*σ
+        elif sampling_type == 'ld':
+            step_size = step_lr * (self.sigmas[i] / 0.01) ** 2
+            pos_next = pos + step_size * eps_pos / self.sigmas[i] + noise * torch.sqrt(step_size * 2)
+            eps_node = eps_node / (1 - at).sqrt()
+            atom_next = atom_type - step_size * eps_node / self.sigmas[i] + noise_node * torch.sqrt(step_size * 2)
 
-def eq_transform(score_d, pos, edge_index, edge_length):
-    N = pos.size(0)
-    dd_dr = (1. / edge_length) * (pos[edge_index[0]] - pos[edge_index[1]])  # (E, 3)
-    # score_pos = scatter_add(dd_dr * score_d, edge_index[0], dim=0, dim_size=N) \
-    #     + scatter_add(- dd_dr * score_d, edge_index[1], dim=0, dim_size=N) # (N, 3)
-    score_pos = scatter_add(dd_dr * score_d, edge_index[0], dim=0, dim_size=N)
-    return score_pos
+        pos = pos_next
+        atom_type = atom_next
+        # atom_type = atom_next
+
+        if torch.isnan(pos).any():
+            print('NaN detected. Please restart.')
+            print(node_eq_global)
+            raise FloatingPointError()
+        pos = center_pos(pos, batch)
+        # atom_f = atom_type[:, :-1] * 4
+        # atom_charge =  torch.round(atom_type[:, -1:] * 10).long()
+        return pos, atom_type
 
 
 def center_pos(pos, batch):
@@ -295,13 +302,7 @@ def center_pos(pos, batch):
     return pos_center
 
 
-def is_train_edge(edge_index, is_sidechain):
-    if is_sidechain is None:
-        return torch.ones(edge_index.size(1), device=edge_index.device).bool()
-    else:
-        is_sidechain = is_sidechain.bool()
-        return torch.logical_or(is_sidechain[edge_index[0]], is_sidechain[edge_index[1]])
-
-
-def is_radius_edge(edge_type):
-    return edge_type == 0
+def clip_norm(vec, limit):
+    norm = torch.norm(vec, dim=-1, p=2, keepdim=True)
+    denom = torch.where(norm > limit, limit / norm, torch.ones_like(norm))
+    return vec * denom

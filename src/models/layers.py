@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 
-
 class Xtoy(nn.Module):
     def __init__(self, dx, dy):
         """ Map node features to global features """

@@ -218,9 +218,7 @@ class QM9Dataset(InMemoryDataset):
     raw_url2 = 'https://ndownloader.figshare.com/files/3195404'
     processed_url = 'https://data.pyg.org/datasets/qm9_v3.zip'
 
-    def __init__(self, stage, root, remove_h: bool, target_prop=None,
-                 transform=None, pre_transform=None, pre_filter=None):
-        self.target_prop = target_prop
+    def __init__(self, stage, root, remove_h: bool, transform=None, pre_transform=None, pre_filter=None):
         self.stage = stage
         if self.stage == 'train':
             self.file_idx = 0
@@ -291,15 +289,15 @@ class QM9Dataset(InMemoryDataset):
         suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False, sanitize=True)
         for i, mol in enumerate(tqdm(suppl)):
             if mol is None or '.' in Chem.MolToSmiles(mol):
-                pharma_score.append(-1)
-                sa.append(-1)
-                qed.append(-1)
+                pharma_score.append(0)
+                sa.append(0)
+                qed.append(0)
                 continue
 
             pharma_match_score_list = [match_score(mol, pp_graph) for pp_graph in pp_graph_list]
 
             pharma_score.append(max(pharma_match_score_list))
-            sa.append(sascorer.calculateScore(mol))
+            sa.append(sascorer.calculateScore(mol) * 0.1)
             qed.append(QED.default(mol))
 
         # data = pd.read_csv(self.raw_paths[1])
@@ -322,8 +320,10 @@ class QM9Dataset(InMemoryDataset):
 
     def process(self):
         RDLogger.DisableLog('rdApp.*')
-
-        types = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4}
+        if self.remove_h:
+            types = {'C': 0, 'N': 1, 'O': 2, 'F': 3}
+        else:
+            types = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4}
         bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
         charge_dict = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'S': 16, 'P': 15, 'Cl': 17, 'Br': 35, 'I': 53}
 
@@ -470,11 +470,11 @@ class QM9DataModule(MolecularDataModule):
         base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
         root_path = os.path.join(base_path, self.datadir)
         datasets = {'train': QM9Dataset(stage='train', root=root_path, remove_h=cfg.dataset.remove_h,
-                                        target_prop=target, transform=transform),
+                                        transform=transform),
                     'val': QM9Dataset(stage='val', root=root_path, remove_h=cfg.dataset.remove_h,
-                                      target_prop=target, transform=transform),
+                                      transform=transform),
                     'test': QM9Dataset(stage='test', root=root_path, remove_h=cfg.dataset.remove_h,
-                                       target_prop=target, transform=transform)}
+                                       transform=transform)}
         super().__init__(cfg, datasets)
 
 
@@ -568,7 +568,7 @@ def get_train_smiles(cfg, train_dataloader, dataset_infos, evaluate_dataset=Fals
         train_dataloader = train_dataloader
         all_molecules = []
         for i, data in enumerate(train_dataloader):
-            dense_data, node_mask, edge_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
+            dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
             dense_data = dense_data.mask(node_mask, collapse=True)
             X, E = dense_data.X, dense_data.E
 
@@ -576,8 +576,9 @@ def get_train_smiles(cfg, train_dataloader, dataset_infos, evaluate_dataset=Fals
                 n = int(torch.sum((X != -1)[k, :]))
                 atom_types = X[k, :n].cpu()
                 edge_types = E[k, :n, :n].cpu()
+                # conformers = pos[k, :n].cpu()
+                # all_molecules.append([atom_types, edge_types, conformers])
                 all_molecules.append([atom_types, edge_types])
-
         print("Evaluating the dataset -- number of molecules to evaluate", len(all_molecules))
         metrics = compute_molecular_metrics(molecule_list=all_molecules, train_smiles=train_smiles,
                                             dataset_info=dataset_infos)
@@ -599,9 +600,9 @@ def compute_qm9_smiles(atom_decoder, train_dataloader, remove_h):
     invalid = 0
     disconnected = 0
     for i, data in enumerate(train_dataloader):
-        dense_data, node_mask, edge_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
+        dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
         dense_data = dense_data.mask(node_mask, collapse=True)
-        X, E = dense_data.X, dense_data.E
+        X, E = dense_data.X,dense_data.E
 
         n_nodes = [int(torch.sum((X != -1)[j, :])) for j in range(X.size(0))]
 
@@ -610,6 +611,8 @@ def compute_qm9_smiles(atom_decoder, train_dataloader, remove_h):
             n = n_nodes[k]
             atom_types = X[k, :n].cpu()
             edge_types = E[k, :n, :n].cpu()
+            # conformers = data.pos[k, :n].cpu()
+            # molecule_list.append([atom_types, edge_types, conformers])
             molecule_list.append([atom_types, edge_types])
 
         for l, molecule in enumerate(molecule_list):

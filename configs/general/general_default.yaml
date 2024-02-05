@@ -1,8 +1,8 @@
 # General settings
 name: 'PharmDiGress'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
 
-wandb: 'online'             # online | offline | disabled
-gpus: 1                    # Multi-gpu is not implemented on this branch
+wandb: 'offline'             # online | offline | disabled
+gpus: 2                    # Multi-gpu is not implemented on this branch
 guidance_target: 'EdgeComCondMulti'
 regressor: True
 
@@ -11,7 +11,7 @@ test_only: null         # Use absolute path
 
 check_val_every_n_epochs: 5
 sample_every_val: 4
-val_check_interval: null
+val_check_interval: 100
 samples_to_generate: 512       # We advise to set it to 2 x batch_size maximum
 samples_to_save: 20
 chains_to_save: 1

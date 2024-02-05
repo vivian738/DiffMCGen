@@ -1,7 +1,8 @@
-from src.diffusion.distributions import DistributionNodes, DistributionProperty
+from src.diffusion.distributions import DistributionNodes
 import src.utils as utils
 import torch
-import lightning.pytorch as pl
+import numpy as np
+import pytorch_lightning as pl
 from torch_geometric.loader import DataLoader
 from torch_geometric.data.lightning import LightningDataset
 
@@ -102,9 +103,9 @@ class AbstractDatasetInfos:
 
     def compute_input_output_dims(self, datamodule, extra_features, domain_features):
         example_batch = next(iter(datamodule.train_dataloader()))
-        ex_dense, node_mask, edge_mask = utils.to_dense(example_batch.x, example_batch.edge_index, example_batch.edge_attr,
-                                             example_batch.batch, example_batch.y)
-        example_data = {'X_t': ex_dense.X, 'E_t': ex_dense.E, 'y_t': example_batch['y'], 'node_mask': node_mask, 'edge_mask':edge_mask}
+        ex_dense, node_mask = utils.to_dense(example_batch.x, example_batch.edge_index,
+                                             example_batch.edge_attr, example_batch.batch, example_batch.y)
+        example_data = {'X_t': ex_dense.X, 'E_t': ex_dense.E, 'y_t': example_batch['y'], 'node_mask': node_mask}
 
         self.input_dims = {'X': example_batch['x'].size(1),
                            'E': example_batch['edge_attr'].size(1),
@@ -121,4 +122,4 @@ class AbstractDatasetInfos:
 
         self.output_dims = {'X': example_batch['x'].size(1),
                             'E': example_batch['edge_attr'].size(1),
-                            'y': example_batch['y'].size(1) + 1}
+                            'y': example_batch['y'].size(1)}

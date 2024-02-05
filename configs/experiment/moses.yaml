@@ -1,15 +1,15 @@
 # @package _global_
 general:
     name : 'moses'
-    gpus : 1
+    gpus : 2
     wandb: 'online'
     remove_h: True
     resume: null
     test_only: null
-    check_val_every_n_epochs: 1
-    val_check_interval: null
+    check_val_every_n_epochs: 5
+    val_check_interval: 100
     sample_every_val: 4
-    samples_to_generate: 256
+    samples_to_generate: 512
     samples_to_save: 20
     chains_to_save: 5
     log_every_steps: 50
@@ -27,7 +27,7 @@ train:
     num_workers: 4
 model:
     n_layers: 12
-    lambda_train: [5, 0]
+    lambda_train: [5, 10]
     type: 'discrete'
     transition: 'marginal'                          # uniform or marginal
     model: 'graph_tf'

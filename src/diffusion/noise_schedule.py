@@ -79,6 +79,7 @@ class PredefinedNoiseScheduleDiscrete(torch.nn.Module):
         return self.alphas_bar.to(t_int.device)[t_int.long()]
 
 
+
 class DiscreteUniformTransition:
     def __init__(self, x_classes: int, e_classes: int, y_classes: int):
         self.X_classes = x_classes

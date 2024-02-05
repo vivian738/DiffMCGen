@@ -6,6 +6,7 @@ import time
 import wandb
 from src.metrics.abstract_metrics import SumExceptBatchMetric, SumExceptBatchMSE, SumExceptBatchKL, CrossEntropyMetric, \
     ProbabilityMetric, NLL
+from torch_scatter import scatter_add
 
 
 class NodeMSE(MeanSquaredError):
@@ -103,7 +104,7 @@ class TrainLossDiscrete(nn.Module):
                       "train_loss/y_CE": self.y_loss.compute() if true_y.numel() > 0 else -1}
             if wandb.run:
                 wandb.log(to_log, commit=True)
-        return loss_X + self.lambda_train[0] * loss_E + self.lambda_train[1] * loss_y
+        return self.lambda_train[0] * loss_X + self.lambda_train[1] * loss_E + self.lambda_train[2] * loss_y
 
     def reset(self):
         for metric in [self.node_loss, self.edge_loss, self.y_loss]:
@@ -112,7 +113,7 @@ class TrainLossDiscrete(nn.Module):
     def log_epoch_metrics(self):
         epoch_node_loss = self.node_loss.compute() if self.node_loss.total_samples > 0 else -1
         epoch_edge_loss = self.edge_loss.compute() if self.edge_loss.total_samples > 0 else -1
-        epoch_y_loss = self.train_y_loss.compute() if self.y_loss.total_samples > 0 else -1
+        epoch_y_loss = self.y_loss.compute() if self.y_loss.total_samples > 0 else -1
 
         to_log = {"train_epoch/x_CE": epoch_node_loss,
                   "train_epoch/E_CE": epoch_edge_loss,
@@ -124,3 +125,89 @@ class TrainLossDiscrete(nn.Module):
 
 
 
+class GlobalLossDiscrete(nn.Module):
+    def __init__(self, cutoff):
+        super().__init__()
+        self.pos_global_loss = MeanSquaredError()
+        self.node_global_loss = MeanSquaredError()
+        self.cutoff = cutoff
+
+    def forward(self, net_out, pos_perturbed, atom_noise, a, pos, node2graph, is_sidechain, log: bool):
+        dist_score_global, node_score_global, edge_index, _, edge_length, local_edge_mask = net_out
+        edge2graph = node2graph.index_select(0, edge_index[0])
+
+        # Compute sigmas_edge
+        a_edge = a.index_select(0, edge2graph).unsqueeze(-1)  # (E, 1)
+
+        # Compute original and perturbed distances
+        d_gt = get_distance(pos, edge_index).unsqueeze(-1)  # (E, 1)
+        d_perturbed = edge_length
+
+        train_edge_mask = is_train_edge(edge_index, is_sidechain)
+        d_perturbed = torch.where(train_edge_mask.unsqueeze(-1), d_perturbed, d_gt)
+
+        d_target = (d_gt - d_perturbed) / (1.0 - a_edge).sqrt() * a_edge.sqrt()  # (E_global, 1), denoising direction
+
+        global_mask = torch.logical_and(
+            torch.logical_or(torch.logical_and(d_perturbed > self.cutoff, d_perturbed <= 10),
+                             local_edge_mask.unsqueeze(-1)),
+            ~local_edge_mask.unsqueeze(-1)
+        )
+
+        edge_inv_global = torch.where(global_mask, dist_score_global, torch.zeros_like(dist_score_global))
+        node_eq_global = eq_transform(edge_inv_global, pos_perturbed, edge_index, edge_length)
+
+        # global pos
+        target_d_global = torch.where(global_mask, d_target, torch.zeros_like(d_target))
+        target_pos_global = eq_transform(target_d_global, pos_perturbed, edge_index, edge_length)
+        loss_global = self.pos_global_loss(node_eq_global, target_pos_global) if target_pos_global.numel() > 0 else -1
+        loss_node_global = self.node_global_loss(node_score_global, atom_noise) if atom_noise.numel() > 0 else -1
+        loss = loss_global + loss_node_global    # + vae_kl_loss
+
+        if log:
+            to_log = {'train_loss/global_mse': loss.detach(),
+                      'train_loss/global_pos_MSE': self.pos_global_loss.compute(),
+                      'train_loss/global_node_MSE': self.node_global_loss.compute()}
+            if wandb.run:
+                wandb.log(to_log, commit=True)
+
+        return loss
+
+    def reset(self):
+        for metric in (self.pos_global_loss, self.node_global_loss):
+            metric.reset()
+
+    def log_epoch_metrics(self):
+        global_pos_loss = self.pos_global_loss.compute() if self.pos_global_loss.total > 0 else -1
+        global_node_loss = self.node_global_loss.compute() if self.node_global_loss.total > 0 else -1
+
+        to_log = {"train_epoch/global_pos_loss": global_pos_loss,
+                  "train_epoch/global_node_loss": global_node_loss}
+        if wandb.run:
+            wandb.log(to_log)
+        return to_log
+
+
+def get_distance(pos, edge_index):
+    return (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1)
+
+
+def eq_transform(score_d, pos, edge_index, edge_length):
+    N = pos.size(0)
+    dd_dr = (1. / edge_length) * (pos[edge_index[0]] - pos[edge_index[1]])  # (E, 3)
+    # score_pos = scatter_add(dd_dr * score_d, edge_index[0], dim=0, dim_size=N) \
+    #     + scatter_add(- dd_dr * score_d, edge_index[1], dim=0, dim_size=N) # (N, 3)
+    score_pos = scatter_add(dd_dr * score_d, edge_index[0], dim=0, dim_size=N)
+    return score_pos
+
+
+def is_radius_edge(edge_type):
+    return edge_type == 0
+
+
+def is_train_edge(edge_index, is_sidechain):
+    if is_sidechain is None:
+        return torch.ones(edge_index.size(1), device=edge_index.device).bool()
+    else:
+        is_sidechain = is_sidechain.bool()
+        return torch.logical_or(is_sidechain[edge_index[0]], is_sidechain[edge_index[1]])

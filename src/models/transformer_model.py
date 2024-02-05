@@ -24,7 +24,7 @@ class XEyTransformerLayer(nn.Module):
         layer_norm_eps: eps value in layer normalizations.
     """
     def __init__(self, dx: int, de: int, dy: int, n_head: int, dim_ffX: int = 2048,
-                 dim_ffE: int = 128, dim_ffy: int = 2048, dropout: float = 0.1,
+                 dim_ffE: int = 128, dim_ffy: int = 2048, dropout: float = 0.2,
                  layer_norm_eps: float = 1e-5, device=None, dtype=None) -> None:
         kw = {'device': device, 'dtype': dtype}
         super().__init__()

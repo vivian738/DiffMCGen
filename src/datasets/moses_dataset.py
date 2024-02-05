@@ -2,6 +2,7 @@ from rdkit import Chem, RDLogger
 from rdkit.Chem.rdchem import BondType as BT
 
 import os
+import copy
 import os.path as osp
 import pathlib
 from typing import Any, Sequence
@@ -17,6 +18,11 @@ from src import utils
 from src.analysis.rdkit_functions import mol2smiles, build_molecule_with_partial_charges, compute_molecular_metrics
 from src.datasets.abstract_dataset import AbstractDatasetInfos, MolecularDataModule
 
+from src.eval import sascorer
+from rdkit.Chem import QED, AllChem
+from src.datasets.pharmacophore_eval import mol2ppgraph, match_score
+from src.datasets.qm9_dataset import EdgeComCondTransform, EdgeComCondMultiTransform
+
 
 def to_list(value: Any) -> Sequence:
     if isinstance(value, Sequence) and not isinstance(value, str):
@@ -25,7 +31,13 @@ def to_list(value: Any) -> Sequence:
         return [value]
 
 
-atom_decoder = ['C', 'N', 'S', 'O', 'F', 'Cl', 'Br', 'H']
+class RemoveYTransform:
+    def __call__(self, data):
+        data.y = torch.zeros((1, 0), dtype=torch.float)
+        return data
+
+
+atom_decoder = ['H', 'C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
 
 
 class MOSESDataset(InMemoryDataset):
@@ -79,6 +91,40 @@ class MOSESDataset(InMemoryDataset):
         valid_path = download_url(self.val_url, self.raw_dir)
         os.rename(valid_path, osp.join(self.raw_dir, 'test_moses.csv'))
 
+        # 添加对药效团匹配评分以及SA， QED的计算
+        target_path = '/raid/yyw/PharmDiGress/data/target_mol.sdf'
+        target_mols = Chem.SDMolSupplier(target_path, removeHs=True, sanitize=True)
+        pp_graph_list = [mol2ppgraph(target_mol) for target_mol in target_mols]
+        for pp_graph in pp_graph_list:
+            pp_graph.ndata['h'] = \
+                torch.cat((pp_graph.ndata['type'], pp_graph.ndata['size'].reshape(-1, 1)), dim=1).float()
+            pp_graph.edata['h'] = pp_graph.edata['dist'].reshape(-1, 1).float()
+
+        pharma_score = []
+        sa = []
+        qed = []
+        path = [train_path, test_path, valid_path]
+
+        for i in path:
+            dataset = pd.read_csv(i)
+
+            for i, smile in enumerate(tqdm(i['SMILES'].values)):
+                mol = Chem.MolFromSmiles(smile)
+                if mol is None:
+                    pharma_score.append(0)
+                    sa.append(0)
+                    qed.append(0)
+                    continue
+                pharma_match_score_list = [match_score(mol, pp_graph) for pp_graph in pp_graph_list]
+
+                pharma_score.append(max(pharma_match_score_list))
+                sa.append(sascorer.calculateScore(mol) * 0.1)
+                qed.append(QED.default(mol))
+            dataset['pharma_score'] = pharma_score
+            dataset['SA'] = sa
+            dataset['QED'] = qed
+            dataset.to_csv(i, index=False, mode='w')
+
 
     def process(self):
         RDLogger.DisableLog('rdApp.*')
@@ -86,8 +132,17 @@ class MOSESDataset(InMemoryDataset):
 
         bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
 
+        charge_dict = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'S': 16, 'P': 15, 'Cl': 17, 'Br': 35, 'I': 53}
+
         path = self.split_paths[self.file_idx]
         smiles_list = pd.read_csv(path)['SMILES'].values
+        phar_score = pd.read_csv(path)['pharma_score'].values
+        sa = pd.read_csv(path)['SA'].values
+        qed = pd.read_csv(path)['QED'].values
+        with open(path, 'r') as f:
+            tmp = list(zip(phar_score, sa, qed))
+            target = [list(v) for v in tmp]
+            target = torch.tensor(target, dtype=torch.float)
 
         data_list = []
         smiles_kept = []
@@ -96,9 +151,22 @@ class MOSESDataset(InMemoryDataset):
             mol = Chem.MolFromSmiles(smile)
             N = mol.GetNumAtoms()
 
+            AllChem.EmbedMolecule(mol, randomSeed=10)
+            AllChem.MMFFOptimizeMolecule(mol)
+
+            conf = mol.GetConformer()
+            pos = conf.GetPositions()
+            pos = torch.tensor(pos, dtype=torch.float)
+
+            charges = []
+            formal_charges = []
+
             type_idx = []
             for atom in mol.GetAtoms():
-                type_idx.append(types[atom.GetSymbol()])
+                atom_str = atom.GetSymbol()
+                type_idx.append(types[atom_str])
+                charges.append(charge_dict[atom_str])
+                formal_charges.append(atom.GetFormalCharge())
 
             row, col, edge_type = [], [], []
             for bond in mol.GetBonds():
@@ -119,13 +187,17 @@ class MOSESDataset(InMemoryDataset):
             edge_attr = edge_attr[perm]
 
             x = F.one_hot(torch.tensor(type_idx), num_classes=len(types)).float()
-            y = torch.zeros(size=(1, 0), dtype=torch.float)
+            atom_type = torch.tensor(type_idx)
+            # y = torch.zeros(size=(1, 0), dtype=torch.float)
+            y = target[i].unsqueeze(0)
 
-            data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y, idx=i)
+            data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
+                        y=y, idx=i, pos=pos, charge=torch.tensor(charges), fc=torch.tensor(formal_charges),
+                        rdmol=copy.deepcopy(mol))
 
             if self.filter_dataset:
                 # Try to build the molecule again from the graph. If it fails, do not add it to the training set
-                dense_data, node_mask, edge_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
+                dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
                 dense_data = dense_data.mask(node_mask, collapse=True)
                 X, E = dense_data.X, dense_data.E
 
@@ -161,17 +233,63 @@ class MOSESDataset(InMemoryDataset):
                 f.writelines('%s\n' % s for s in smiles_kept)
             print(f"Number of molecules kept: {len(smiles_kept)} / {len(smiles_list)}")
 
+    def compute_property_mean_mad(self, prop2idx):
+        prop_values = []
+
+        prop_ids = torch.tensor(list(prop2idx.values()))
+        for idx in range(len(self.indices())):
+            data = self.get(self.indices()[idx])
+            tars = []
+            for prop_id in prop_ids:
+                tars.append(data.y[0][prop_id].reshape(1))
+            tars = torch.cat(tars)
+            prop_values.append(tars)
+        prop_values = torch.stack(prop_values, dim=0)
+        mean = torch.mean(prop_values, dim=0, keepdim=True)
+        ma = torch.abs(prop_values - mean)
+        mad = torch.mean(ma, dim=0)
+
+        prop_norm = {}
+        for tmp_i, key in enumerate(prop2idx.keys()):
+            prop_norm[key] = {
+                'mean': mean[0, tmp_i].item(),
+                'mad': mad[tmp_i].item()
+            }
+        return prop_norm
 
 
 class MosesDataModule(MolecularDataModule):
     def __init__(self, cfg):
         self.remove_h = False
         self.datadir = cfg.dataset.datadir
+
+        target = getattr(cfg.general, 'guidance_target')
+        regressor = getattr(cfg.general, 'regressor')
+        prop2idx = {'pharma_score': 0, 'SA': 1, 'QED': 2, 'affinity_score': 3}
+
+        self.atom_decoder = atom_decoder
+        self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
+        atom_index = {1: 0, 6: 1, 7: 2, 16: 3, 8: 4, 9: 5, 17: 6, 35: 7}
+        if regressor and target == 'EdgeComCond':
+
+            transform = EdgeComCondTransform(self.atom_encoder.values(), atom_index, include_aromatic=True,
+                                             property_idx=prop2idx[cfg.model.context])
+        elif regressor and target == 'EdgeComCondMulti':
+
+            transform = EdgeComCondMultiTransform(self.atom_encoder.values(), atom_index, include_aromatic=True,
+                                                  property_idx1=prop2idx[cfg.model.context[0]],
+                                                  property_idx2=prop2idx[cfg.model.context[1]],
+                                                  property_idx3=prop2idx[cfg.model.context[2]],
+                                                  property_idx4=prop2idx[cfg.model.context[3]])
+        else:
+            transform = RemoveYTransform()
+
         self.filter_dataset = cfg.dataset.filter
         self.train_smiles = []
         base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
         root_path = os.path.join(base_path, self.datadir)
-        datasets = {'train': MOSESDataset(stage='train', root=root_path, filter_dataset=self.filter_dataset),
+        datasets = {'train': MOSESDataset(stage='train', root=root_path, filter_dataset=self.filter_dataset,
+                                          transform=transform),
                     'val': MOSESDataset(stage='val', root=root_path, filter_dataset=self.filter_dataset),
                     'test': MOSESDataset(stage='test', root=root_path, filter_dataset=self.filter_dataset)}
         super().__init__(cfg, datasets)
@@ -184,14 +302,14 @@ class MOSESinfos(AbstractDatasetInfos):
         self.name = 'MOSES'
         self.input_dims = None
         self.output_dims = None
-        self.remove_h = False
+        self.remove_h = cfg.dataset.remove_h
 
         self.atom_decoder = atom_decoder
         self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
-        self.atom_weights = {0: 12, 1: 14, 2: 32, 3: 16, 4: 19, 5: 35.4, 6: 79.9, 7: 1}
-        self.valencies = [4, 3, 4, 2, 1, 1, 1, 1]
+        self.atom_weights = {0: 1, 1: 12, 2: 14, 3: 32, 4: 16, 5: 19, 6: 35.4, 7: 79.9}
+        self.valencies = [1, 4, 3, 4, 2, 1, 1, 1]
         self.num_atom_types = len(self.atom_decoder)
-        self.max_weight = 350
+        self.max_weight = 500
 
         meta_files = dict(n_nodes=f'{self.name}_n_counts.txt',
                           node_types=f'{self.name}_atom_types.txt',
@@ -207,7 +325,7 @@ class MOSESinfos(AbstractDatasetInfos):
                                      1.436946094036102295e-01, 9.265746921300888062e-02, 1.820066757500171661e-02,
                                      2.065089574898593128e-06])
         self.max_n_nodes = len(self.n_nodes) - 1 if self.n_nodes is not None else None
-        self.node_types = torch.tensor([0.722338, 0.13661, 0.163655, 0.103549, 0.1421803, 0.005411, 0.00150, 0.0])
+        self.node_types = torch.tensor([0.0, 0.722338, 0.13661, 0.163655, 0.103549, 0.1421803, 0.005411, 0.00150])
         self.edge_types = torch.tensor([0.89740, 0.0472947, 0.062670, 0.0003524, 0.0486])
         self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
         self.valency_distribution[:7] = torch.tensor([0.0, 0.1055, 0.2728, 0.3613, 0.2499, 0.00544, 0.00485])
@@ -233,6 +351,7 @@ class MOSESinfos(AbstractDatasetInfos):
             self.edge_types = datamodule.edge_counts()
             print("Distribution of edge types", self.edge_types)
             np.savetxt(meta_files["edge_types"], self.edge_types.numpy())
+
         if recompute_statistics or self.valency_distribution is None:
             valencies = datamodule.valency_count(self.max_n_nodes)
             print("Distribution of the valencies", valencies)
@@ -255,7 +374,7 @@ def get_train_smiles(cfg, datamodule, dataset_infos, evaluate_dataset=False):
         train_dataloader = datamodule.dataloaders['train']
         all_molecules = []
         for i, data in enumerate(tqdm(train_dataloader)):
-            dense_data, node_mask, edge_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
+            dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
             dense_data = dense_data.mask(node_mask, collapse=True)
             X, E = dense_data.X, dense_data.E
 

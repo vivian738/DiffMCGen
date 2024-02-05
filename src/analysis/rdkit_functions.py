@@ -10,7 +10,7 @@ except ModuleNotFoundError as e:
     from warnings import warn
     warn("Didn't find rdkit, this will fail")
     assert use_rdkit, "Didn't find rdkit"
-
+from rdkit.Geometry import Point3D
 
 allowed_bonds = {'H': 1, 'C': 4, 'N': 3, 'O': 2, 'F': 1, 'B': 3, 'Al': 3, 'Si': 4, 'P': [3, 5],
                  'S': 4, 'Cl': 1, 'As': 3, 'Br': 1, 'I': 1, 'Hg': [1, 2], 'Bi': [3, 5], 'Se': [2, 4, 6]}
@@ -33,8 +33,8 @@ class BasicMolecularMetrics(object):
         num_components = []
         all_smiles = []
         for graph in generated:
-            atom_types, edge_types = graph
-            mol = build_molecule(atom_types, edge_types, self.dataset_info.atom_decoder)
+            atom_types, edge_types, conformers = graph
+            mol = build_molecule(atom_types, edge_types, conformers, self.dataset_info.atom_decoder)
             smiles = mol2smiles(mol)
             try:
                 mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
@@ -78,7 +78,7 @@ class BasicMolecularMetrics(object):
     def compute_relaxed_validity(self, generated):
         valid = []
         for graph in generated:
-            atom_types, edge_types = graph
+            atom_types, edge_types, conformers = graph
             mol = build_molecule_with_partial_charges(atom_types, edge_types, self.dataset_info.atom_decoder)
             smiles = mol2smiles(mol)
             if smiles is not None:
@@ -130,7 +130,7 @@ def mol2smiles(mol):
     return Chem.MolToSmiles(mol)
 
 
-def build_molecule(atom_types, edge_types, atom_decoder, verbose=False):
+def build_molecule(atom_types, edge_types, positions, atom_decoder, verbose=False):
     if verbose:
         print("building new molecule")
 
@@ -149,6 +149,18 @@ def build_molecule(atom_types, edge_types, atom_decoder, verbose=False):
             if verbose:
                 print("bond added:", bond[0].item(), bond[1].item(), edge_types[bond[0], bond[1]].item(),
                       bond_dict[edge_types[bond[0], bond[1]].item()] )
+    try:
+        mol = mol.GetMol()
+    except Chem.KekulizeException:
+        print("Can't kekulize molecule")
+        return None
+
+    # Set coordinates
+    positions = positions.double()
+    conf = Chem.Conformer(mol.GetNumAtoms())
+    for i in range(mol.GetNumAtoms()):
+        conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
+    mol.AddConformer(conf)
     return mol
 
 
@@ -304,7 +316,7 @@ def compute_molecular_metrics(molecule_list, train_smiles, dataset_info):
         n_molecules = len(molecule_list)
 
         for i, mol in enumerate(molecule_list):
-            atom_types, edge_types = mol
+            atom_types, edge_types, conformers = mol
 
             validity_results = check_stability(atom_types, edge_types, dataset_info)
 

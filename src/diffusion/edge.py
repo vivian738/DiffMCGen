@@ -60,6 +60,7 @@ class MLPEdgeEncoder(Module):
             edge_attr:  The representation of edges. (E, 2 * num_gaussians)
         """
         d_emb = self.mlp(edge_length) # (num_edge, hidden_dim)
+        edge_type = torch.clamp(edge_type, 0, self.bond_emb.num_embeddings - 1)
         edge_attr = self.bond_emb(edge_type) # (num_edge, hidden_dim)
         return d_emb * edge_attr # (num_edge, hidden)
 
@@ -281,7 +282,7 @@ def _extend_to_radius_graph(pos, edge_index, edge_type, cutoff, batch, unspecifi
 
     new_edge_index = composed_adj.indices()
     new_edge_type = composed_adj.values().long()
-    return new_edge_index, new_edge_type
+    return new_edge_index, -new_edge_type
 
 
 def extend_graph_order_radius(num_nodes, pos, edge_index, edge_type, batch, order=3, cutoff=10.0,

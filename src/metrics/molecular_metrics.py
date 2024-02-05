@@ -169,7 +169,7 @@ class GeneratedNDistribution(Metric):
 
     def update(self, molecules):
         for molecule in molecules:
-            atom_types, _ = molecule
+            atom_types, _, _ = molecule
             n = atom_types.shape[0]
             self.n_dist[n] += 1
 
@@ -185,7 +185,7 @@ class GeneratedNodesDistribution(Metric):
 
     def update(self, molecules):
         for molecule in molecules:
-            atom_types, _ = molecule
+            atom_types, _, _ = molecule
 
             for atom_type in atom_types:
                 assert int(atom_type) != -1, "Mask error, the molecules should already be masked at the right shape"
@@ -203,7 +203,7 @@ class GeneratedEdgesDistribution(Metric):
 
     def update(self, molecules):
         for molecule in molecules:
-            _, edge_types = molecule
+            _, edge_types, _ = molecule
             mask = torch.ones_like(edge_types)
             mask = torch.triu(mask, diagonal=1).bool()
             edge_types = edge_types[mask]
@@ -224,7 +224,7 @@ class MeanNumberEdge(Metric):
 
     def update(self, molecules, weight=1.0) -> None:
         for molecule in molecules:
-            _, edge_types = molecule
+            _, edge_types, _ = molecule
             triu_edge_types = torch.triu(edge_types, diagonal=1)
             bonds = torch.nonzero(triu_edge_types)
             self.total_edge += len(bonds)
@@ -242,7 +242,7 @@ class ValencyDistribution(Metric):
 
     def update(self, molecules) -> None:
         for molecule in molecules:
-            _, edge_types = molecule
+            _, edge_types,_ = molecule
             edge_types[edge_types == 4] = 1.5
             valencies = torch.sum(edge_types, dim=0)
             unique, counts = torch.unique(valencies, return_counts=True)

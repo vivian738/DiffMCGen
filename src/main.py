@@ -7,9 +7,9 @@ import torch
 torch.cuda.empty_cache()
 import hydra
 from omegaconf import DictConfig
-from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.utilities.warnings import PossibleUserWarning
+from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.utilities.warnings import PossibleUserWarning
 
 from src import utils
 from metrics.abstract_metrics import TrainAbstractMetricsDiscrete, TrainAbstractMetrics
@@ -20,11 +20,13 @@ from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
 
 warnings.filterwarnings("ignore", category=PossibleUserWarning)
 
-os.environ["NCCL_DEBUG"] = "INFO"
+# os.environ["NCCL_DEBUG"] = "INFO"   #debug use
 os.environ['NCCL_DEBUG_SUBSYS'] = 'COLL'
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-os.environ['HYDRA_FULL_ERROR']='1'
-
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+os.environ['HYDRA_FULL_ERROR']='1'   #
+os.environ['NCCL_P2P_DISABLE']='1'
+os.environ["WORLD_SIZE"] = "1"
 
 def get_resume(cfg, model_kwargs):
     """ Resumes a run. It loads previous config without allowing to update keys (used for testing). """
@@ -212,8 +214,7 @@ def main(cfg: DictConfig):
                       callbacks=callbacks,
                       log_every_n_steps=50 if name != 'debug' else 1,
                       logger=[],
-                      accumulate_grad_batches=1,
-                      overfit_batches=0.01)
+                      accumulate_grad_batches=1)
 
     if not cfg.general.test_only:
         trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.general.resume)
