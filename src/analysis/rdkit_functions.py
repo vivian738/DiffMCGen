@@ -45,14 +45,10 @@ class BasicMolecularMetrics(object):
             atom_types, edge_types, conformers, _ = graph
             mol = build_molecule(atom_types, edge_types, conformers, self.dataset_info.atom_decoder)
             smiles = mol2smiles(mol)
-            try:
-                mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
-                num_components.append(len(mol_frags))
-            except:
-                pass
             if smiles is not None:
                 try:
                     mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
+                    num_components.append(len(mol_frags))
                     largest_mol = max(mol_frags, default=mol, key=lambda m: m.GetNumAtoms())
                     smiles = mol2smiles(largest_mol)
                     valid.append(smiles)
@@ -379,7 +375,7 @@ def compute_molecular_metrics(molecule_list, train_smiles, dataset_info):
     else:
         validity_dict = {'mol_stable': -1, 'atm_stable': -1}
 
-    pp_graph_list, _ = load_graphs("/raid/yyw/PharmDiGress/data/PDK1_pdb/pdk1_phar_graphs.bin")
+    pp_graph_list, _ = load_graphs("/raid/yyw/PharmDiGress/data/GLP1_pdb/glp1_phar_graphs.bin")
     # Calculate the 3D subgraph isomorphim matching score in every pair molecular graph
     for pp_graph in pp_graph_list:
         pp_graph.ndata['h'] = \

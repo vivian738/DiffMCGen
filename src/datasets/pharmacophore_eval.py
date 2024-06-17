@@ -419,7 +419,7 @@ def get_best_match_phar_models(mols, num_clusters=6):
                 most_similar_index = i
         selected_mols.append(cluster_mol[most_similar_index])
     pp_graph_list= [mol2ppgraph(mol) for mol in selected_mols]  #get reference graph dataset
-    save_graphs("/raid/yyw/PharmDiGress/data/PDK1_pdb/pdk1_phar_graphs.bin", pp_graph_list)
+    save_graphs("/raid/yyw/PharmDiGress/data/LRRK2_pdb/lrrk2_phar_graphs.bin", pp_graph_list)
     # Calculate the 3D subgraph isomorphim matching score in every pair molecular graph
     return selected_mols, pp_graph_list
 

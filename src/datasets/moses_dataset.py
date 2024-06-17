@@ -101,7 +101,7 @@ class MOSESDataset(InMemoryDataset):
         if self.filter_dataset:
             return ['train_filtered.pt', 'test_filtered.pt', 'test_scaffold_filtered.pt']
         else:
-            return ['train.pt', 'test.pt', 'test_scaffold.pt']
+            return ['train_h.pt', 'test_h.pt', 'test_scaffold_h.pt']
 
     def download(self):
 
@@ -158,7 +158,6 @@ class MOSESDataset(InMemoryDataset):
                 writer.close()
         
 
-
     def process(self):
         RDLogger.DisableLog('rdApp.*')
         if self.remove_h == False:
@@ -174,7 +173,7 @@ class MOSESDataset(InMemoryDataset):
 
         path = self.split_paths[self.file_idx]
         smiles_list = pd.read_csv(path)['smiles'].values
-        phar_score = pd.read_csv(path)['pharma_score'].values
+        phar_score = pd.read_csv(path)['glp1_score'].values
         sa = pd.read_csv(path)['SA'].values
         qed = pd.read_csv(path)['QED'].values
         acute_tox = pd.read_csv(path)['acute_tox'].values
@@ -196,8 +195,8 @@ class MOSESDataset(InMemoryDataset):
             except ValueError:
                 continue
                 
-            mol = Chem.RemoveHs(m)
-
+            # mol = Chem.RemoveHs(m)
+            mol = m
             conf = mol.GetConformer()
             pos = conf.GetPositions()
             pos = torch.tensor(pos, dtype=torch.float)
@@ -310,7 +309,7 @@ class MosesDataModule(MolecularDataModule):
 
         target = getattr(cfg.general, 'guidance_target')
         regressor = getattr(cfg.general, 'regressor')
-        prop2idx = {'pharma_score': 0, 'SA': 1, 'QED': 2, 'acute_tox': 3}
+        prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
 
         if cfg.dataset.remove_h == False:
             self.atom_decoder = ['H', 'C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
@@ -354,7 +353,7 @@ class MOSESinfos(AbstractDatasetInfos):
         self.input_dims = None
         self.output_dims = None
         self.remove_h = cfg.dataset.remove_h
-        self.prop2idx = {'pharma_score': 0, 'SA': 1, 'QED': 2, 'acute_tox_score': 3}
+        self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
 
 
         if self.remove_h == False:
@@ -363,26 +362,30 @@ class MOSESinfos(AbstractDatasetInfos):
             self.atom_weights = {0: 1, 1: 12, 2: 14, 3: 32, 4: 16, 5: 19, 6: 35.4, 7: 79.9}
             self.valencies = [1, 4, 3, 4, 2, 1, 1, 1]
             self.num_atom_types = len(self.atom_decoder)
-            self.max_weight = 700
+            self.max_weight = 500
             
             meta_files = dict(n_nodes=f'{self.name}_n_counts.txt',
                             node_types=f'{self.name}_atom_types.txt',
                             edge_types=f'{self.name}_edge_types.txt',
                             valency_distribution=f'{self.name}_valencies.txt')
 
-            self.n_nodes = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.097634362347889692e-06,
-                                        1.858580617408733815e-05, 5.007842264603823423e-05, 5.678996240021660924e-05,
-                                        1.244216400664299726e-04, 4.486406978685408831e-04, 2.253012731671333313e-03,
-                                        3.231865121051669121e-03, 6.709992419928312302e-03, 2.289564721286296844e-02,
-                                        5.411050841212272644e-02, 1.099515631794929504e-01, 1.223291903734207153e-01,
-                                        1.280680745840072632e-01, 1.445975750684738159e-01, 1.505961418151855469e-01,
-                                        1.436946094036102295e-01, 9.265746921300888062e-02, 1.820066757500171661e-02,
-                                        2.065089574898593128e-06])
+            self.n_nodes = torch.tensor([0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+                                        0.0000e+00, 0.0000e+00, 2.8397e-06, 0.0000e+00, 5.6795e-07, 5.6795e-06,
+                                        3.9756e-06, 1.8742e-05, 3.1805e-05, 3.1805e-05, 6.3610e-05, 1.1359e-04,
+                                        1.6584e-04, 1.7493e-04, 3.5099e-04, 4.7480e-04, 8.1046e-04, 1.2824e-03,
+                                        1.8782e-03, 2.7392e-03, 4.4584e-03, 6.3536e-03, 8.7890e-03, 1.2624e-02,
+                                        1.7098e-02, 2.2378e-02, 2.9360e-02, 3.5387e-02, 4.2517e-02, 4.9722e-02,
+                                        5.5761e-02, 6.0463e-02, 6.5334e-02, 6.6398e-02, 6.8688e-02, 6.6917e-02,
+                                        6.3352e-02, 5.9485e-02, 5.3930e-02, 4.7901e-02, 3.9722e-02, 3.2245e-02,
+                                        2.4240e-02, 2.0185e-02, 1.3103e-02, 9.1860e-03, 6.1918e-03, 4.4323e-03,
+                                        2.7244e-03, 1.3830e-03, 9.4563e-04, 3.3850e-04, 1.4823e-04, 5.3955e-05,
+                                        2.7829e-05, 6.2474e-06, 1.1359e-06])
             self.max_n_nodes = len(self.n_nodes) - 1 if self.n_nodes is not None else None
-            self.node_types = torch.tensor([0.0, 0.722338, 0.13661, 0.163655, 0.103549, 0.1421803, 0.005411, 0.00150])
-            self.edge_types = torch.tensor([0.89740, 0.0472947, 0.062670, 0.0003524, 0.0486])
+            self.node_types = torch.tensor([0.4538, 0.3943, 0.0745, 0.0089, 0.0567, 0.0078, 0.0030, 0.0008])
+            self.edge_types = torch.tensor([9.4731e-01, 3.7415e-02, 2.0810e-03, 1.0259e-04, 1.3092e-02])
             self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
-            self.valency_distribution[:7] = torch.tensor([0.0, 0.1055, 0.2728, 0.3613, 0.2499, 0.00544, 0.00485])
+            self.valency_distribution[:8] = torch.tensor([0.0000e+00, 4.0108e-01, 8.2538e-02, 1.1124e-01, 4.0108e-01, 1.1953e-06,
+        4.0429e-03, 2.0918e-05])
         else:
             self.atom_decoder = ['C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
             self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
@@ -396,11 +399,16 @@ class MOSESinfos(AbstractDatasetInfos):
                             edge_types=f'{self.name}_edge_types.txt',
                             valency_distribution=f'{self.name}_valencies.txt')
 
-            self.n_nodes = None
+            self.n_nodes = torch.tensor([0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+                                        0.0000e+00, 0.0000e+00, 3.4077e-06, 2.0446e-05, 5.5091e-05, 6.0202e-05,
+                                        1.3517e-04, 4.6345e-04, 2.3524e-03, 3.3492e-03, 6.8932e-03, 2.3576e-02,
+                                        5.5278e-02, 1.1133e-01, 1.2298e-01, 1.2805e-01, 1.4400e-01, 1.4964e-01,
+                                        1.4232e-01, 9.1484e-02, 1.8010e-02, 1.7038e-06])
             self.max_n_nodes = len(self.n_nodes) - 1 if self.n_nodes is not None else None
-            self.node_types = None
-            self.edge_types = None
-            self.valency_distribution = None
+            self.node_types = torch.tensor([0.7220, 0.1364, 0.0164, 0.1038, 0.0143, 0.0055, 0.0015])
+            self.edge_types = torch.tensor([8.9733e-01, 4.7399e-02, 6.3060e-03, 3.5479e-04, 4.8611e-02])
+            self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
+            self.valency_distribution[:7] = torch.tensor([0.0000, 0.1063, 0.2730, 0.3604, 0.2498, 0.0054, 0.0050])
         if meta is None:
             meta = dict(n_nodes=None, node_types=None, edge_types=None, valency_distribution=None)
         assert set(meta.keys()) == set(meta_files.keys())

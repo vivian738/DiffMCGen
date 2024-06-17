@@ -336,8 +336,6 @@ class SiMSE(MSEPerClass):
     def __init__(self, i):
         super().__init__(i)
 
-
-
 # Bonds MSE
 
 class NoBondMSE(MSEPerClass):

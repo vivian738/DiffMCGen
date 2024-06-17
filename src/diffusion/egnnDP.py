@@ -26,7 +26,6 @@ class SinusoidalPosEmb(torch.nn.Module):
 class DualEdgeEGNN(torch.nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.edge_encoder_local = get_edge_encoder(cfg)
         self.edge_encoder_global = get_edge_encoder(cfg)
         self.training = cfg.model.train
         self.context = cfg.model.context
@@ -38,6 +37,7 @@ class DualEdgeEGNN(torch.nn.Module):
         self.norm_coors = cfg.model.norm_coors
         self.time_emb = True
         self.cutoff=cfg.model.cutoff
+        self.num_diffusion_timesteps = cfg.model.num_diffusion_timesteps
         # self.vae_context = cfg.model.vae_context if 'vae_context' in cfg.model else False
 
         '''
@@ -70,23 +70,7 @@ class DualEdgeEGNN(torch.nn.Module):
             cutoff=self.cutoff
         )
         
-        self.encoder_local = EGNNSparseNetwork(
-            n_layers=self.num_convs,
-            feats_input_dim=self.atom_type_input_dim,
-            feats_dim=self.hidden_dim,
-            edge_attr_dim=self.hidden_dim,
-            m_dim=self.hidden_dim,
-            soft_edge=self.soft_edge,
-            norm_coors=self.norm_coors,
-            cutoff=self.cutoff
-        )
-
         self.grad_global_dist_mlp = MultiLayerPerceptron(
-            2 * cfg.model.hidden_dim,
-            [cfg.model.hidden_dim, cfg.model.hidden_dim // 2, 1],
-            activation=cfg.model.mlp_act
-        )
-        self.grad_local_dist_mlp = MultiLayerPerceptron(
             2 * cfg.model.hidden_dim,
             [cfg.model.hidden_dim, cfg.model.hidden_dim // 2, 1],
             activation=cfg.model.mlp_act
@@ -103,7 +87,7 @@ class DualEdgeEGNN(torch.nn.Module):
         # # variances
         alphas = (1. - betas).cumprod(dim=0)
         self.alphas = torch.nn.Parameter(alphas, requires_grad=False)
-        self.num_timesteps = self.betas.size(0) -1
+        self.num_timesteps = self.betas.size(0)
 
     def forward(self, atom_type, pos, bond_index, bond_type, batch, time_step,
                 edge_type=None, edge_index=None, edge_length=None, context=None):
@@ -149,14 +133,6 @@ class DualEdgeEGNN(torch.nn.Module):
         )
         if self.time_emb:
             edge_attr_global += temb_edge
-         # Encoding local
-        edge_attr_local = self.edge_encoder_local(
-            edge_length=edge_length,
-            edge_type=edge_type
-        )   # Embed edges
-        # edge_attr += temb_edge
-        if self.time_emb:
-            edge_attr_local += temb_edge
         # EGNN
         node_attr_global, _ = self.encoder_global(
             z=atom_type,
@@ -177,24 +153,7 @@ class DualEdgeEGNN(torch.nn.Module):
         Invariant features of edges (radius graph, global)
         """
         edge_inv_global = self.grad_global_dist_mlp(h_pair_global)
-        # Local
-        node_attr_local, _ = self.encoder_local(
-            z=atom_type,
-            pos=pos,
-            edge_index=edge_index[:, local_edge_mask],
-            edge_attr=edge_attr_local[local_edge_mask],
-            batch=batch
-        )
-        ## Assemble pairwise features
-        h_pair_local = assemble_atom_pair_feature(
-            node_attr=node_attr_local,
-            edge_index=edge_index[:, local_edge_mask],
-            edge_attr=edge_attr_local[local_edge_mask],
-        )    # (E_local, 2H)
-        ## Invariant features of edges (bond graph, local)
-        edge_inv_local = self.grad_local_dist_mlp(h_pair_local)
-
-        return edge_inv_global, edge_inv_local, edge_index, edge_type, edge_length, local_edge_mask
+        return edge_inv_global, edge_index, edge_type, edge_length, local_edge_mask
 
     def egn_process(self, pos, batch, time_step):
 
@@ -224,7 +183,7 @@ class DualEdgeEGNN(torch.nn.Module):
 
         return pos_perturbed, a, node2graph
 
-    def sampled_dynamics_pos_atom(self, edge_inv_global, edge_inv_local, edge_index, edge_length, local_edge_mask,
+    def sampled_dynamics_pos_atom(self, edge_inv_global, edge_index, edge_length, local_edge_mask,
                                   pos, batch, t, i, j, step_lr=1e-6, w_global=1.0):
         def compute_alpha(beta, t):
             beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
@@ -238,10 +197,9 @@ class DualEdgeEGNN(torch.nn.Module):
             node_eq_global = clip_norm(node_eq_global, limit=1000.0)
         else:
             node_eq_global = 0
-        # local
-        node_eq_local = eq_transform(edge_inv_local, pos, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
+
             # Sum
-        eps_pos = node_eq_local + node_eq_global * w_global # + eps_pos_reg * w_reg
+        eps_pos = node_eq_global * w_global # + eps_pos_reg * w_reg
 
         # Update
 

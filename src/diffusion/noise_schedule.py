@@ -139,18 +139,18 @@ class DiscreteUniformTransition:
 
 
 class MarginalUniformTransition:
-    def __init__(self, x_marginals, e_marginals, y_classes):
+    def __init__(self, x_marginals, e_marginals , y_marginals):
         self.X_classes = len(x_marginals)
         self.E_classes = len(e_marginals)
-        self.y_classes = y_classes
+        self.y_classes = len(y_marginals)
         self.x_marginals = x_marginals
         self.e_marginals = e_marginals
 
         self.u_x = x_marginals.unsqueeze(0).expand(self.X_classes, -1).unsqueeze(0)
         self.u_e = e_marginals.unsqueeze(0).expand(self.E_classes, -1).unsqueeze(0)
-        self.u_y = torch.ones(1, self.y_classes, self.y_classes)
-        if self.y_classes > 0:
-            self.u_y = self.u_y / self.y_classes
+        self.u_y = y_marginals.unsqueeze(0).expand(self.y_classes, -1).unsqueeze(0)
+        # if self.y_classes > 0:
+        #     self.u_y = self.u_y / self.y_classes
 
     def get_Qt(self, beta_t, device):
         """ Returns one-step transition matrices for X and E, from step t - 1 to step t.
@@ -160,7 +160,7 @@ class MarginalUniformTransition:
         returns: qx (bs, dx, dx), qe (bs, de, de), qy (bs, dy, dy). """
         beta_t = beta_t.unsqueeze(1)
         beta_t = beta_t.to(device)
-        self.u_x = self.u_x.to(device)
+        self.u_x = self.u_x.to(device)                                   
         self.u_e = self.u_e.to(device)
         self.u_y = self.u_y.to(device)
 

@@ -258,8 +258,6 @@ class Guacamolinfos(AbstractDatasetInfos):
         self.valency_distribution = torch.zeros(self.max_n_nodes * 3 - 2)
         self.valency_distribution[0: 7] = torch.tensor([0.0000, 0.1105, 0.2645, 0.3599, 0.2552, 0.0046, 0.0053])
 
-        self.complete_infos(n_nodes=self.n_nodes, node_types=self.node_types)
-
         if recompute_statistics:
             self.n_nodes = datamodule.node_counts()
             print("Distribution of number of nodes", self.n_nodes)

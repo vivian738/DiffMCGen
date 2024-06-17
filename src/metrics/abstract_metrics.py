@@ -64,15 +64,15 @@ class SumExceptBatchMSE(MeanSquaredError):
         self.total += n_obs
 
     def _mean_squared_error_update(self, preds: Tensor, target: Tensor):
-            """ Updates and returns variables required to compute Mean Squared Error. Checks for same shape of input
-            tensors.
-                preds: Predicted tensor
-                target: Ground truth tensor
-            """
-            diff = preds - target
-            sum_squared_error = torch.sum(diff * diff)
-            n_obs = preds.shape[0]
-            return sum_squared_error, n_obs
+        """ Updates and returns variables required to compute Mean Squared Error. Checks for same shape of input
+        tensors.
+            preds: Predicted tensor
+            target: Ground truth tensor
+        """
+        diff = preds - target
+        sum_squared_error = torch.sum(diff * diff)
+        n_obs = preds.shape[0]
+        return sum_squared_error, n_obs
 
 
 class SumExceptBatchKL(Metric):

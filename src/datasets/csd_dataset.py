@@ -223,6 +223,7 @@ class CSDDataset(InMemoryDataset):
         # for mol in selected_mol:
         #     writer.write(mol)
         # writer.close()
+        # 导入药效团以及毒性预测模型
         pp_graph_list, _ = load_graphs("/raid/yyw/PharmDiGress/data/PDK1_pdb/pdk1_phar_graphs.bin")
         for pp_graph in pp_graph_list:
             pp_graph.ndata['h'] = \
@@ -266,7 +267,7 @@ class CSDDataset(InMemoryDataset):
                 continue
 
             N = mol.GetNumAtoms()
-            if N > 90:
+            if N > 40:
                 continue
 
             check = True
@@ -312,7 +313,7 @@ class CSDDataset(InMemoryDataset):
             x = F.one_hot(torch.tensor(type_idx), num_classes=len(types)).float()
             atom_type = torch.tensor(type_idx)
             # y = torch.zeros((1, 0), dtype=torch.float)
-            y = torch.tensor(target_df[target_df.index==i].values, dtype=torch.float)
+            y = torch.tensor(target_df.values[i], dtype=torch.float)
 
             data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
                         y=y, idx=i, pos=pos, charge=torch.tensor(charges), fc=torch.tensor(formal_charges),
@@ -358,7 +359,7 @@ class CSDDataModule(MolecularDataModule):
         self.remove_h = False
         target = getattr(cfg.general, 'guidance_target')
         regressor = getattr(cfg.general, 'regressor')
-        prop2idx = {'pharma_score': 0, 'SA': 1, 'QED': 2, 'acute_tox': 3}
+        prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
 
         atom_encoder = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
                         'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
@@ -401,34 +402,23 @@ class CSDinfos(AbstractDatasetInfos):
                              'S', 'Cl', 'Ca', 'Br', 'I', 'Ba']
         self.valencies = [1, 3, 4, 3, 2, 1, 2, 3, 2, 1, 2, 1, 1, 2]
         self.num_atom_types = len(self.atom_decoder)
-        self.max_n_nodes = 90
-        self.max_weight = 700
+        self.max_n_nodes = 40
+        self.max_weight = 500
         self.atom_weights = {0: 1, 1: 11, 2: 12, 3: 14, 4: 16, 5:19, 6:24, 7:31, 8:32, 
                              9:35, 10:40, 11:80, 12:127, 13:137}
-        self.prop2idx = {'pharma_score': 0, 'SA': 1, 'QED': 2, 'acute_tox': 3}
-        self.node_types = torch.tensor([3.6757e-04, 9.0605e-04, 7.8588e-01, 5.4925e-02, 1.1512e-01, 1.2504e-02,
-                                        4.7416e-05, 3.3827e-03, 1.4125e-02, 7.3451e-03, 9.5568e-06, 4.4384e-03,
-                                        9.5163e-04, 2.9405e-06])
-        self.edge_types = torch.tensor([9.1989e-01, 5.8431e-02, 2.1299e-02, 3.8051e-04, 0.0000e+00])
+        self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+        self.n_nodes = torch.tensor([0.0000, 0.0000, 0.0001, 0.0004, 0.0010, 0.0013, 0.0023, 0.0027, 0.0057,
+                                    0.0072, 0.0134, 0.0137, 0.0200, 0.0193, 0.0288, 0.0292, 0.0408, 0.0420,
+                                    0.0543, 0.0506, 0.0576, 0.0507, 0.0585, 0.0492, 0.0554, 0.0459, 0.0481,
+                                    0.0372, 0.0396, 0.0293, 0.0338, 0.0235, 0.0273, 0.0186, 0.0215, 0.0137,
+                                    0.0174, 0.0100, 0.0122, 0.0073, 0.0101])
+        self.node_types = torch.tensor([3.3095e-04, 9.1393e-04, 7.8595e-01, 5.5002e-02, 1.1528e-01, 1.2172e-02,
+                                        1.4454e-05, 3.2918e-03, 1.4168e-02, 7.4630e-03, 4.4473e-06, 4.4840e-03,
+                                        9.3394e-04, 0.0000e+00])
+        self.edge_types = torch.tensor([9.1977e-01, 5.8504e-02, 2.1344e-02, 3.8092e-04, 0.0000e+00])
         self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
-        self.valency_distribution[:9] = torch.tensor([1.5254e-04, 1.2999e-01, 2.2948e-01, 3.7990e-01, 2.5414e-01, 2.2480e-03,
-                                                    4.0907e-03, 1.1027e-06, 3.6757e-06])
-        self.n_nodes = torch.tensor([0.0000e+00, 0.0000e+00, 1.5615e-04, 4.4130e-04, 9.4371e-04, 1.1678e-03,
-                                    2.0979e-03, 2.5460e-03, 5.3975e-03, 6.8708e-03, 1.2805e-02, 1.3205e-02,
-                                    1.8962e-02, 1.8290e-02, 2.7517e-02, 2.7340e-02, 3.8142e-02, 3.9548e-02,
-                                    5.1266e-02, 4.7756e-02, 5.3825e-02, 4.7084e-02, 5.4898e-02, 4.7002e-02,
-                                    5.2291e-02, 4.3153e-02, 4.5386e-02, 3.5270e-02, 3.7558e-02, 2.7924e-02,
-                                    3.1937e-02, 2.1895e-02, 2.5636e-02, 1.7510e-02, 2.0395e-02, 1.3198e-02,
-                                    1.6552e-02, 9.3556e-03, 1.1467e-02, 7.0337e-03, 9.3556e-03, 5.3703e-03,
-                                    7.2374e-03, 3.5576e-03, 5.5061e-03, 2.7497e-03, 4.2229e-03, 2.1522e-03,
-                                    3.5983e-03, 1.4529e-03, 2.6682e-03, 1.1474e-03, 2.3423e-03, 7.2645e-04,
-                                    1.9282e-03, 6.1104e-04, 1.6362e-03, 4.6846e-04, 1.0388e-03, 3.3267e-04,
-                                    1.3171e-03, 2.7157e-04, 6.1104e-04, 2.3084e-04, 7.3324e-04, 2.1047e-04,
-                                    6.7214e-04, 1.6294e-04, 4.4130e-04, 9.5050e-05, 4.0736e-04, 9.5050e-05,
-                                    4.8883e-04, 1.0184e-04, 1.8331e-04, 1.2221e-04, 2.5799e-04, 8.1471e-05,
-                                    3.1231e-04, 6.1104e-05, 2.6478e-04, 6.7893e-05, 1.2900e-04, 2.7157e-05,
-                                    2.5799e-04, 5.4314e-05, 1.2221e-04, 3.3946e-05, 1.2221e-04, 1.3579e-05,
-                                    1.2221e-04])
+        self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.2928e-01, 2.2961e-01, 3.8086e-01, 2.5391e-01, 2.1662e-03,
+                                                    4.1731e-03, 1.1118e-06, 1.1118e-06])
 
         if recompute_statistics or self.n_nodes is None:
             np.set_printoptions(suppress=True, precision=5)

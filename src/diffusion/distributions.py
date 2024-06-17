@@ -12,6 +12,7 @@ class DistributionNodes:
             prob = torch.zeros(max_n_nodes + 1)
             for num_nodes, count in histogram.items():
                 prob[num_nodes] = count
+            # prob = prob[prob !=0]
         else:
             prob = histogram
 
@@ -70,7 +71,7 @@ class DistributionProperty:
 
     def _create_prob_dist(self, nodes_arr, values, distribution):
         min_nodes, max_nodes = torch.min(nodes_arr), torch.max(nodes_arr)
-        for n_nodes in range(int(min_nodes), int(max_nodes) + 1):
+        for n_nodes in range(0, int(max_nodes) + 1):
             idxs = nodes_arr == n_nodes
             values_filtered = values[idxs]
             if len(values_filtered) > 0:

@@ -68,9 +68,10 @@ class TrainLossDiscrete(nn.Module):
         self.node_loss = CrossEntropyMetric()
         self.edge_loss = CrossEntropyMetric()
         self.y_loss = MeanSquaredError()
+        self.cross_active_edge = CrossEntropyMetric()
         self.lambda_train = lambda_train
 
-    def forward(self, masked_pred_X, masked_pred_E, pred_y, true_X, true_E, true_y, log: bool):
+    def forward(self, masked_pred_X, masked_pred_E, pred_y, true_X, true_E, true_y, active_edge_t0, log: bool):
         """ Compute train metrics
         masked_pred_X : tensor -- (bs, n, dx)
         masked_pred_E : tensor -- (bs, n, n, de)
@@ -97,23 +98,25 @@ class TrainLossDiscrete(nn.Module):
         loss_X = self.node_loss(flat_pred_X, flat_true_X) if true_X.numel() > 0 else 0.0
         loss_E = self.edge_loss(flat_pred_E, flat_true_E) if true_E.numel() > 0 else 0.0
         loss_y = self.y_loss(pred_y, true_y) if true_y.numel() > 0 else 0.0
+        cross_edge = self.cross_active_edge(active_edge_t0.exp(), flat_true_E) if true_E.numel() > 0 else 0.0
 
         if log:
-            to_log = {"train_loss/batch_CE": (loss_X + loss_E + loss_y).detach(),
+            to_log = {"train_loss/batch_CE": (loss_X + loss_E + loss_y + cross_edge).detach(),
                       "train_loss/X_CE": self.node_loss.compute() if true_X.numel() > 0 else -1,
                       "train_loss/E_CE": self.edge_loss.compute() if true_E.numel() > 0 else -1,
-                      "train_loss/y_MSE": self.y_loss.compute() if true_y.numel() > 0 else -1}
+                      "train_loss/y_MSE": self.y_loss.compute() if true_y.numel() > 0 else -1,
+                      'train_loss/cross_active_edge': self.cross_active_edge.compute() if true_E.numel() > 0 else -1}
             if wandb.run:
                 wandb.log(to_log, commit=True)
-        return self.lambda_train[0] * loss_X + self.lambda_train[1] * loss_E + self.lambda_train[2] * loss_y
+        return self.lambda_train[0] * loss_X + self.lambda_train[1] * loss_E  + self.lambda_train[2] * loss_y + cross_edge
 
     def reset(self):
-        for metric in [self.node_loss, self.edge_loss, self.y_loss]:
+        for metric in [self.node_loss, self.edge_loss, self.y_loss, self.cross_active_edge]:
             metric.reset()
 
     def log_epoch_metrics(self):
         epoch_node_loss = self.node_loss.compute() if self.node_loss.total_samples > 0 else -1
-        epoch_edge_loss = self.edge_loss.compute() if self.edge_loss.total_samples > 0 else -1
+        epoch_edge_loss = (self.edge_loss.compute() + self.cross_active_edge.compute()) if self.edge_loss.total_samples > 0 else -1
         epoch_y_loss = self.y_loss.compute() if self.y_loss.total > 0 else -1
 
         to_log = {"train_epoch/X_CE": epoch_node_loss,
@@ -129,12 +132,11 @@ class TrainLossDiscrete(nn.Module):
 class DualLossDiscrete(nn.Module):
     def __init__(self, cutoff):
         super().__init__()
-        self.pos_local_loss = 5 * MeanSquaredError()
         self.pos_global_loss = 2 * MeanSquaredError()
         self.cutoff = cutoff
 
     def forward(self, net_out, pos_perturbed, a, pos, node2graph, is_sidechain, log: bool):
-        edge_inv_global, edge_inv_local, edge_index, _, edge_length, local_edge_mask = net_out
+        edge_inv_global, edge_index, _, edge_length, local_edge_mask = net_out
         edge2graph = node2graph.index_select(0, edge_index[0])
 
         # Compute sigmas_edge
@@ -158,16 +160,12 @@ class DualLossDiscrete(nn.Module):
         target_pos_global = eq_transform(target_d_global, pos_perturbed, edge_index, edge_length)
         node_eq_global = eq_transform(edge_inv_global, pos_perturbed, edge_index, edge_length)
         loss_global = self.pos_global_loss(node_eq_global, target_pos_global) if target_pos_global.numel() > 0 else 0.0
-        target_pos_local = eq_transform(d_target[local_edge_mask], pos_perturbed, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
-        node_eq_local = eq_transform(edge_inv_local, pos_perturbed, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
-        loss_local = self.pos_local_loss(node_eq_local, target_pos_local) if target_pos_local.numel() > 0 else 0.0
 
-        loss = loss_global + 5 * loss_local
+        loss = loss_global
         if log:
             to_log = {
                 'train_loss/pos_loss': loss.detach(),
-                'train_loss/global_pos_MSE': self.pos_global_loss.compute(),
-                'train_loss/local_pos_MSE': self.pos_local_loss.compute()
+                'train_loss/global_pos_MSE': self.pos_global_loss.compute()
                 }
             if wandb.run:
                 wandb.log(to_log, commit=True)
@@ -176,15 +174,12 @@ class DualLossDiscrete(nn.Module):
 
     def reset(self):
         self.pos_global_loss.reset()
-        self.pos_local_loss.reset()
 
     def log_epoch_metrics(self):
         global_pos_loss = self.pos_global_loss.compute() if self.pos_global_loss.metric_b.total > 0 else -1
-        local_pos_loss = self.pos_local_loss.compute() if self.pos_local_loss.metric_b.total > 0 else -1
 
         to_log = {
-            "train_epoch/global_pos_loss": global_pos_loss,
-            "train_epoch/local_pos_loss": local_pos_loss}
+            "train_epoch/global_pos_loss": global_pos_loss}
         if wandb.run:
             wandb.log(to_log)
         return to_log
