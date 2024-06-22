@@ -57,6 +57,8 @@ class EdgeComCondTransform(object):
         data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
 
         data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        properties = data.y
+        data.y = properties[0, self.property_idx:self.property_idx+1]
 
         return data
 
@@ -94,6 +96,14 @@ class EdgeComCondMultiTransform(object):
         data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
 
         data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        properties = data.y
+        prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
+        property_data = []
+        for prop_idx in prop_list:
+            property = properties[0, prop_idx]
+            property_data.append(property)
+        property_ten = torch.tensor(property_data)
+        data.y = property_ten.unsqueeze(0)
 
         return data
 
@@ -110,7 +120,7 @@ class PropClassifierTransform(object):
         self.property_idx = property_idx
 
     def __call__(self, data: Data):
-        data.charge = None
+        data.charge = data.charge
         atom_type = data.atom_type
         one_hot = atom_type.unsqueeze(-1) == self.atom_type_list.unsqueeze(0)
         data.one_hot = one_hot.float()
@@ -177,7 +187,7 @@ class RemoveYTransform:
 
 class CSDDataset(InMemoryDataset):
 
-    def __init__(self, stage, root, transform=None, pre_transform=None, pre_filter=None):
+    def __init__(self, stage, root, prop2idx, transform=None, pre_transform=None, pre_filter=None):
         self.stage = stage
         if self.stage == 'train':
             self.file_idx = 0
@@ -185,8 +195,10 @@ class CSDDataset(InMemoryDataset):
             self.file_idx = 1
         else:
             self.file_idx = 2
+        self.prop2idx = prop2idx
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[self.file_idx])
+        
 
     @property
     def raw_file_names(self):
@@ -224,7 +236,8 @@ class CSDDataset(InMemoryDataset):
         #     writer.write(mol)
         # writer.close()
         # 导入药效团以及毒性预测模型
-        pp_graph_list, _ = load_graphs("/raid/yyw/PharmDiGress/data/PDK1_pdb/pdk1_phar_graphs.bin")
+        target = list(self.prop2idx.keys())[0].split('_')[0]
+        pp_graph_list, _ = load_graphs(f"/raid/yyw/PharmDiGress/data/{target}_pdb/{target}_phar_graphs.bin")
         for pp_graph in pp_graph_list:
             pp_graph.ndata['h'] = \
                 torch.cat((pp_graph.ndata['type'], pp_graph.ndata['size'].reshape(-1, 1)), dim=1).float()
@@ -236,7 +249,7 @@ class CSDDataset(InMemoryDataset):
         with multiprocessing.Pool(8) as pool:
             with open(self.raw_paths[1], 'a', newline='') as csvfile:
                 writer = csv.writer(csvfile, delimiter=',')
-                writer.writerow(["pharma_score","SA","QED", "acute_tox"])
+                writer.writerow([f"{target}","SA","QED", "acute_tox"])
             # 使用 tqdm 迭代并监视分子列表
                 for result in pool.imap(process_mol, tqdm([(mol, pp_graph_list, loaded_reg) for mol in suppl], total=len(suppl))):
                     writer.writerow(result)
@@ -260,6 +273,12 @@ class CSDDataset(InMemoryDataset):
         charge_dict = {'H': 1,'B': 5, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'Mg': 12, 'P': 15, 
                         'S': 16, 'Cl': 17, 'Ca': 20, 'Br': 35, 'I': 53, 'Ba': 56}
         target_df = pd.read_csv(self.split_paths[self.file_idx], index_col=0)
+        with open(self.raw_paths[1], 'r') as f:
+            target = f.read().split('\n')[1:-1]
+            target = [[float(x) for x in line.split(',')[1:]]
+                      for line in target]
+            target = torch.tensor(target, dtype=torch.float)
+        f.close()
         suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False, sanitize=False)
         data_list = []
         for i, mol in enumerate(tqdm(suppl)):
@@ -313,7 +332,7 @@ class CSDDataset(InMemoryDataset):
             x = F.one_hot(torch.tensor(type_idx), num_classes=len(types)).float()
             atom_type = torch.tensor(type_idx)
             # y = torch.zeros((1, 0), dtype=torch.float)
-            y = torch.tensor(target_df.values[i], dtype=torch.float)
+            y = target[i].unsqueeze(0)
 
             data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
                         y=y, idx=i, pos=pos, charge=torch.tensor(charges), fc=torch.tensor(formal_charges),
@@ -359,7 +378,7 @@ class CSDDataModule(MolecularDataModule):
         self.remove_h = False
         target = getattr(cfg.general, 'guidance_target')
         regressor = getattr(cfg.general, 'regressor')
-        prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+        prop2idx =  {'glp1_score' :0, 'cav32_score':1, 'hpk1_score' :2, 'lrrk2_score' :3, 'pharma_score' :4, 'SA' :5, 'QED':6, 'acute_tox':7}
 
         atom_encoder = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
                         'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
@@ -379,11 +398,11 @@ class CSDDataModule(MolecularDataModule):
 
         base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
         root_path = os.path.join(base_path, self.datadir)
-        datasets = {'train': CSDDataset(stage='train', root=root_path,
+        datasets = {'train': CSDDataset(stage='train', root=root_path,prop2idx=prop2idx,
                                         transform=transform),
-                    'val': CSDDataset(stage='val', root=root_path, 
+                    'val': CSDDataset(stage='val', root=root_path, prop2idx=prop2idx,
                                       transform=transform),
-                    'test': CSDDataset(stage='test', root=root_path,
+                    'test': CSDDataset(stage='test', root=root_path,prop2idx=prop2idx,
                                        transform=transform)}
         super().__init__(cfg, datasets)
 

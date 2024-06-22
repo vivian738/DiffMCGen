@@ -226,7 +226,7 @@ class MeanNumberEdge(Metric):
         for molecule in molecules:
             _, edge_types, _, _ = molecule
             triu_edge_types = torch.triu(edge_types, diagonal=1)
-            bonds = torch.nonzero(triu_edge_types)
+            bonds = torch.where(triu_edge_types!=0)
             self.total_edge += len(bonds)
         self.total_samples += len(molecules)
 

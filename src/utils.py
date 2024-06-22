@@ -7,6 +7,8 @@ import torch
 import omegaconf
 import wandb
 from torch_geometric.utils import dense_to_sparse
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
 
 
 def create_folders(args):
@@ -190,6 +192,20 @@ def remove_mean_with_mask(x, node_mask):
     mean = torch.sum(x, dim=1, keepdim=True) / N
     x = x - mean * node_mask
     return x
+
+def normalize_prop(y):
+    y_np = y.cpu().numpy()
+
+    # 使用 Scikit-learn 的 MinMaxScaler 进行归一化
+    scaler = MinMaxScaler()
+    for i in range(y_np.shape[1]):
+        mask = y_np[:, i] > 1
+        if np.any(mask):
+            y_np[mask, i] = scaler.fit_transform(y_np[mask, i].reshape(-1, 1)).reshape(-1)
+
+    # 转换回 PyTorch 张量
+    normalized_y = torch.from_numpy(y_np).to(y.device)
+    return normalized_y
 
 
 def center_pos(pos, batch):

@@ -363,7 +363,7 @@ class PropClassifierTransform(object):
         self.property_idx = property_idx
 
     def __call__(self, data: Data):
-        data.charge = None
+        data.charge = data.charge
         atom_type = data.atom_type
         one_hot = atom_type.unsqueeze(-1) == self.atom_type_list.unsqueeze(0)
         data.one_hot = one_hot.float()

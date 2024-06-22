@@ -10,9 +10,10 @@ torch.cuda.empty_cache()
 import hydra
 from omegaconf import DictConfig
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, DeviceStatsMonitor
 from pytorch_lightning.utilities.warnings import PossibleUserWarning
-
+import random
+# from pytorch_lightning.loggers import TensorBoardLogger
 # import sys
 # sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -174,10 +175,13 @@ def main(cfg: DictConfig):
         last_ckpt_save = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}", filename='last', every_n_epochs=1)
         callbacks.append(last_ckpt_save)
         callbacks.append(checkpoint_callback)
+        # callbacks.append(DeviceStatsMonitor())
 
     # if cfg.train.ema_decay > 0:
     #     ema_callback = utils.EMACallback(decay=cfg.train.ema_decay)
     #     callbacks.append(ema_callback)
+    # os.makedirs("tb_logs/my_model", exist_ok=True)
+    # logger = TensorBoardLogger("tb_logs", name="my_model")
 
     name = cfg.general.name
     if name == 'debug':
@@ -185,15 +189,17 @@ def main(cfg: DictConfig):
 
     use_gpu = cfg.general.gpus > 0 and torch.cuda.is_available()
     trainer = Trainer(gradient_clip_val=cfg.train.clip_grad,
+                    #   profiler="simple",
                       strategy="ddp",  # Needed to load old checkpoints: ddp_find_unused_parameters_true
                       accelerator='gpu' if use_gpu else 'cpu',
                       devices=cfg.general.gpus if use_gpu else 1,
                       max_epochs=cfg.train.n_epochs,
                       check_val_every_n_epoch=cfg.general.check_val_every_n_epochs,
-                    #   fast_dev_run=5,  # debug: True-every process circulate 5 times, int-circulate {int} times
+                    #   fast_dev_run=20,  # debug: True-every process circulate 5 times, int-circulate {int} times
                       enable_progress_bar=False,
                       callbacks=callbacks,
                       log_every_n_steps=50 if name != 'debug' else 1,
+                    #   precision=16,
                       logger=[],
                       accumulate_grad_batches=5)
 

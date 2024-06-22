@@ -144,7 +144,7 @@ class PropClassifierTransform(object):
         self.property_idx = property_idx
 
     def __call__(self, data: Data):
-        data.charge = None
+        data.charge = data.charge
         atom_type = data.atom_type
         one_hot = atom_type.unsqueeze(-1) == self.atom_type_list.unsqueeze(0)
         data.one_hot = one_hot.float()
@@ -292,30 +292,19 @@ class QM9Dataset(InMemoryDataset):
         # for mol in selected_mol:
         #     writer.write(mol)
         # writer.close()
-        pp_graph_list, _ = load_graphs("/raid/yyw/PharmDiGress/data/PDK1_pdb/pdk1_phar_graphs.bin")
-        for pp_graph in pp_graph_list:
-            pp_graph.ndata['h'] = \
-                torch.cat((pp_graph.ndata['type'], pp_graph.ndata['size'].reshape(-1, 1)), dim=1).float()
-            pp_graph.edata['h'] = pp_graph.edata['dist'].reshape(-1, 1).float()
-        pharma_score = []
         sa = []
         qed = []
         suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False, sanitize=True)
         for i, mol in enumerate(tqdm(suppl)):
             if mol is None or '.' in Chem.MolToSmiles(mol):
-                pharma_score.append(0)
                 sa.append(0)
                 qed.append(0)
                 continue
 
-            pharma_match_score_list = [match_score(mol, pp_graph) for pp_graph in pp_graph_list]
-
-            pharma_score.append(max(pharma_match_score_list))
             sa.append(sascorer.calculateScore(mol) * 0.1)
             qed.append(QED.default(mol))
 
         # data = pd.read_csv(self.raw_paths[1])
-        dataset['pharma_score'] = pharma_score
         dataset['SA'] = sa
         dataset['QED'] = qed
         dataset.to_csv(self.raw_paths[1], index=False, mode='w')

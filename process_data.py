@@ -43,7 +43,8 @@ if __name__ == '__main__':
     # for mol in selected_mol:
     #     writer.write(mol)
     # writer.close()
-    # pp_graph_list, _ = load_graphs("./data/PDK1_pdb/pdk1_phar_graphs.bin")
+    # target = dataset_info.prop2idx[0]
+    # pp_graph_list, _ = load_graphs(f"./data/{target}_pdb/{target}_phar_graphs.bin")
     # for pp_graph in pp_graph_list:
     #     pp_graph.ndata['h'] = \
     #         torch.cat((pp_graph.ndata['type'], pp_graph.ndata['size'].reshape(-1, 1)), dim=1).float()
@@ -59,7 +60,7 @@ if __name__ == '__main__':
     #         result = process_mol(arg)
     #         writer.writerow(result)
         
-
+    
     pp_graph_list1, _ = load_graphs("./data/HPK1_pdb/hpk1_phar_graphs.bin")
     for pp_graph1 in pp_graph_list1:
         pp_graph1.ndata['h'] = \

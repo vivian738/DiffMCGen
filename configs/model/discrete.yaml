@@ -22,13 +22,14 @@ lambda_train: [2, 6, 2]
 # EGNNSparseNetwork
 train: True
 num_convs: 6 # global 6 local 4(geom) 6(qm9) 6(csd)
-num_atom: 9  # with_h: 6, without_h: 5, csd: 15, moses_no_h: 8 moses_h:9
+num_convs_local: 4
+num_atom: 15  # with_h: 6, without_h: 5, csd: 15, moses_no_h: 8 moses_h:9
 hidden_dim: 256
 soft_edge: True
 norm_coors: True
 mlp_act: 'relu'
-cutoff: 2
-num_diffusion_timesteps: 501
+cutoff: 10
+num_diffusion_timesteps: 1000
 edge_encoder: 'mlp'
 smooth_conv: False
 beta_schedule: 'sigmoid'

@@ -374,8 +374,11 @@ def compute_molecular_metrics(molecule_list, train_smiles, dataset_info):
             wandb.log(validity_dict)
     else:
         validity_dict = {'mol_stable': -1, 'atm_stable': -1}
-
-    pp_graph_list, _ = load_graphs("/raid/yyw/PharmDiGress/data/GLP1_pdb/glp1_phar_graphs.bin")
+    if dataset_info.name == 'qm9':
+        pp_graph_list, _ = load_graphs(f"/raid/yyw/PharmDiGress/data/lrrk2_pdb/lrrk2_phar_graphs.bin")
+    else:
+        target = list(dataset_info.prop2idx.keys())[0].split('_')[0]
+        pp_graph_list, _ = load_graphs(f"/raid/yyw/PharmDiGress/data/{target}_pdb/{target}_phar_graphs.bin")
     # Calculate the 3D subgraph isomorphim matching score in every pair molecular graph
     for pp_graph in pp_graph_list:
         pp_graph.ndata['h'] = \

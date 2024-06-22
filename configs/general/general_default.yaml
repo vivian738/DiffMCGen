@@ -1,5 +1,5 @@
 # General settings
-name: 'moses_dual'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
+name: 'csd_dual'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
 
 wandb: 'offline'             # online | offline | disabled
 gpus: 2                    # Multi-gpu is not implemented on this branch

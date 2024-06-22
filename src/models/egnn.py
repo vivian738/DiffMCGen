@@ -375,7 +375,6 @@ class EGNNSparseNetwork(nn.Module):
         self.update_feats = update_feats
         self.update_coors = update_coors
         self.dropout = dropout
-        self.cutoff = cutoff
         self.coor_weights_clamp_value = coor_weights_clamp_value
         self.recalc = recalc
 

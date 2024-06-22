@@ -139,7 +139,7 @@ class DiscreteUniformTransition:
 
 
 class MarginalUniformTransition:
-    def __init__(self, x_marginals, e_marginals , y_marginals):
+    def __init__(self, x_marginals, e_marginals, y_marginals):
         self.X_classes = len(x_marginals)
         self.E_classes = len(e_marginals)
         self.y_classes = len(y_marginals)

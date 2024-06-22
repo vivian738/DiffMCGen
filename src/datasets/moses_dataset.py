@@ -22,7 +22,6 @@ from datasets.abstract_dataset import AbstractDatasetInfos, MolecularDataModule
 from eval import sascorer
 from rdkit.Chem import QED, AllChem
 from datasets.pharmacophore_eval import mol2ppgraph, match_score, get_best_match_phar_models
-from datasets.qm9_dataset import EdgeComCondTransform, EdgeComCondMultiTransform
 from dgl.data.utils import load_graphs
 import multiprocessing
 
@@ -61,13 +60,112 @@ def process_mol(args):
             loaded_reg.predict([AllChem.GetMorganFingerprintAsBitVect(mol, 2, 1024)]).item()
         ]
 
+class EdgeComCondTransform(object):
+    """
+    Transform data with node features. Compress single/double/triple bond types to one channel.
+    Conditional property.
+
+    Edge:
+        0-th ch: exist edge or not
+        1-th ch: 0, 1, 2, 3; other bonds, single, double, triple bonds
+        2-th ch: aromatic bond or not
+    """
+
+    def __init__(self, atom_type_list, atom_index, include_aromatic, property_idx):
+        super().__init__()
+        self.atom_type_list = torch.tensor(list(atom_type_list))
+        self.include_aromatic = include_aromatic
+        self.property_idx = property_idx
+        self.atom_index = {v : k for k, v in atom_index.items()}
+
+    def __call__(self, data: Data):
+        '''
+                one-hot feature
+        '''
+        atom_type = data.atom_type.tolist()
+        # print(data.atom_type)
+        atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
+        # print(atom_type)
+        data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
+
+        data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        properties = data.y
+        data.y = properties[0, self.property_idx:self.property_idx+1]
+
+        return data
+
+
+class EdgeComCondMultiTransform(object):
+    """
+    Transform data with node and edge features. Compress single/double/triple bond types to one channel.
+    Conditional property.
+
+    Edge:
+        0-th ch: exist edge or not
+        1-th ch: 0, 1, 2, 3; other bonds, single, double, triple bonds
+        2-th ch: aromatic bond or not
+    """
+
+    def __init__(self, atom_type_list, atom_index, include_aromatic, property_idx1, property_idx2, property_idx3, property_idx4):
+        super().__init__()
+        self.atom_type_list = torch.tensor(list(atom_type_list))
+        self.include_aromatic = include_aromatic
+        self.atom_index = {v : k for k, v in atom_index.items()}
+        self.property_idx1 = property_idx1
+        self.property_idx2 = property_idx2
+        self.property_idx3 = property_idx3
+        self.property_idx4 = property_idx4
+
+    def __call__(self, data: Data):
+        '''
+            one-hot feature
+        '''
+        atom_type = data.atom_type.tolist()
+        # print(data.atom_type)
+        # atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
+        atom_type = torch.tensor(atom_type)
+        # print(atom_type)
+        data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
+
+        data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        properties = data.y
+        prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
+        property_data = []
+        for prop_idx in prop_list:
+            property = properties[0, prop_idx:prop_idx+1]
+            property_data.append(property)
+        property_ten = torch.tensor(property_data)
+        data.y = property_ten.unsqueeze(0)
+
+        return data
+
+
+class PropClassifierTransform(object):
+    """
+        Transform data with node and edge features.
+        Conditional property.
+
+    """
+    def __init__(self, atom_type_list, property_idx):
+        super().__init__()
+        self.atom_type_list = torch.tensor(list(atom_type_list))
+        self.property_idx = property_idx
+
+    def __call__(self, data: Data):
+        data.charge = data.charge
+        atom_type = data.atom_type
+        one_hot = atom_type.unsqueeze(-1) == self.atom_type_list.unsqueeze(0)
+        data.one_hot = one_hot.float()
+        data.y = data.y[0, self.property_idx]
+
+        return data
 
 class MOSESDataset(InMemoryDataset):
     train_url = 'https://media.githubusercontent.com/media/molecularsets/moses/master/data/train.csv'
     val_url = 'https://media.githubusercontent.com/media/molecularsets/moses/master/data/test.csv'
     test_url = 'https://media.githubusercontent.com/media/molecularsets/moses/master/data/test_scaffolds.csv'
 
-    def __init__(self, stage, root, filter_dataset: bool, remove_h: bool, point_phore: list, transform=None, pre_transform=None, pre_filter=None):
+    def __init__(self, stage, root, filter_dataset: bool, remove_h: bool, point_phore: list, prop2idx:dict, transform=None, pre_transform=None, pre_filter=None):
         self.stage = stage
         self.remove_h = remove_h
         self.filter_dataset = filter_dataset
@@ -78,8 +176,10 @@ class MOSESDataset(InMemoryDataset):
         else:
             self.file_idx = 2
         self.phore = point_phore
+        self.prop2idx = prop2idx
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[self.file_idx])
+        
 
     @property
     def raw_file_names(self):
@@ -101,7 +201,7 @@ class MOSESDataset(InMemoryDataset):
         if self.filter_dataset:
             return ['train_filtered.pt', 'test_filtered.pt', 'test_scaffold_filtered.pt']
         else:
-            return ['train_h.pt', 'test_h.pt', 'test_scaffold_h.pt']
+            return ['train.pt', 'test.pt', 'test_scaffold.pt']
 
     def download(self):
 
@@ -128,7 +228,8 @@ class MOSESDataset(InMemoryDataset):
         # for mol in selected_mol:
         #     writer.write(mol)
         # writer.close()
-        pp_graph_list, _ = load_graphs("/raid/yyw/PharmDiGress/data/PDK1_pdb/pdk1_phar_graphs.bin")
+        target = list(self.prop2idx.keys())[0].split('_')[0]
+        pp_graph_list, _ = load_graphs("/raid/yyw/PharmDiGress/data/{target}_pdb/{target}_phar_graphs.bin")
         for pp_graph in pp_graph_list:
             pp_graph.ndata['h'] = \
                 torch.cat((pp_graph.ndata['type'], pp_graph.ndata['size'].reshape(-1, 1)), dim=1).float()
@@ -172,15 +273,13 @@ class MOSESDataset(InMemoryDataset):
         bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
 
         path = self.split_paths[self.file_idx]
-        smiles_list = pd.read_csv(path)['smiles'].values
-        phar_score = pd.read_csv(path)['glp1_score'].values
-        sa = pd.read_csv(path)['SA'].values
-        qed = pd.read_csv(path)['QED'].values
-        acute_tox = pd.read_csv(path)['acute_tox'].values
-        with open(path, 'r') as f:
-            tmp = list(zip(phar_score, sa, qed, acute_tox))
-            target = [list(v) for v in tmp]
-            target = torch.tensor(target, dtype=torch.float)
+        if self.file_idx == 0:
+            sampled_df = pd.read_csv(path).sample(frac=1/3, random_state=42)
+        else:
+            sampled_df = pd.read_csv(path)
+        smiles_list = sampled_df['smiles'].values
+        sampled_array = sampled_df.iloc[:, 1:].to_numpy()
+        target = torch.tensor(sampled_array, dtype=torch.float)
 
         data_list = []
         smiles_kept = []
@@ -195,8 +294,8 @@ class MOSESDataset(InMemoryDataset):
             except ValueError:
                 continue
                 
-            # mol = Chem.RemoveHs(m)
-            mol = m
+            mol = Chem.RemoveHs(m)
+            # mol = m
             conf = mol.GetConformer()
             pos = conf.GetPositions()
             pos = torch.tensor(pos, dtype=torch.float)
@@ -309,7 +408,7 @@ class MosesDataModule(MolecularDataModule):
 
         target = getattr(cfg.general, 'guidance_target')
         regressor = getattr(cfg.general, 'regressor')
-        prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+        prop2idx = {'pharma_score':0,'SA':1,'QED':2,'acute_tox':3,'glp1_score':4,'cav32_score':5,'hpk1_score':6,'lrrk2_score':7}
 
         if cfg.dataset.remove_h == False:
             self.atom_decoder = ['H', 'C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
@@ -338,11 +437,11 @@ class MosesDataModule(MolecularDataModule):
         base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
         root_path = os.path.join(base_path, self.datadir)
         datasets = {'train': MOSESDataset(stage='train', root=root_path, filter_dataset=self.filter_dataset,
-                                          remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, transform=transform),
+                                          remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, prop2idx=prop2idx, transform=transform),
                     'val': MOSESDataset(stage='val', root=root_path, filter_dataset=self.filter_dataset, 
-                                        remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, transform=transform),
+                                        remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, prop2idx=prop2idx, transform=transform),
                     'test': MOSESDataset(stage='test', root=root_path, filter_dataset=self.filter_dataset, 
-                                        remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, transform=transform)}
+                                        remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, prop2idx=prop2idx, transform=transform)}
         super().__init__(cfg, datasets)
 
 
