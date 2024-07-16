@@ -133,11 +133,11 @@ class DualLossDiscrete(nn.Module):
     def __init__(self, cutoff):
         super().__init__()
         self.pos_global_loss = 2 * MeanSquaredError()
-        self.pos_local_loss = 5 * MeanSquaredError()
+        # self.pos_local_loss = 5 * MeanSquaredError()
         self.cutoff = cutoff
 
-    def forward(self, net_out, pos_perturbed, a, pos, node2graph, is_sidechain, log: bool):
-        edge_inv_global, edge_inv_local, edge_index, _, edge_length, local_edge_mask = net_out
+    def forward(self, net_out, a, pos, pos_perturbed, node2graph, is_sidechain, log: bool):
+        edge_inv_global, edge_index, _, edge_length = net_out #edge_inv_local, , local_edge_mask
         edge2graph = node2graph.index_select(0, edge_index[0])
 
         # Compute sigmas_edge
@@ -152,25 +152,25 @@ class DualLossDiscrete(nn.Module):
 
         d_target = (d_gt - d_perturbed) / (1.0 - a_edge).sqrt() * a_edge.sqrt()  # (E_global, 1), denoising direction
 
-        global_mask = torch.logical_and(
-            torch.logical_or(d_perturbed <= self.cutoff, local_edge_mask.unsqueeze(-1)),
-            ~local_edge_mask.unsqueeze(-1)
-        )
-        target_d_global = torch.where(global_mask, d_target, torch.zeros_like(d_target))
-        edge_inv_global = torch.where(global_mask, edge_inv_global, torch.zeros_like(edge_inv_global))
-        target_pos_global = eq_transform(target_d_global, pos_perturbed, edge_index, edge_length)
+        # global_mask = torch.logical_and(
+        #     torch.logical_or(d_perturbed <= self.cutoff, local_edge_mask.unsqueeze(-1)),
+        #     ~local_edge_mask.unsqueeze(-1)
+        # )
+        # target_d_global = torch.where(global_mask, d_target, torch.zeros_like(d_target))
+        # edge_inv_global = torch.where(global_mask, edge_inv_global, torch.zeros_like(edge_inv_global))
+        target_pos_global = eq_transform(d_target, pos_perturbed, edge_index, edge_length) #target_d_global
         node_eq_global = eq_transform(edge_inv_global, pos_perturbed, edge_index, edge_length)
-        loss_global = self.pos_global_loss(node_eq_global, target_pos_global) if target_pos_global.numel() > 0 else 0.0
+        loss = self.pos_global_loss(node_eq_global, target_pos_global) if target_pos_global.numel() > 0 else 0.0
 
-        target_pos_local = eq_transform(d_target[local_edge_mask], pos_perturbed, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
-        node_eq_local = eq_transform(edge_inv_local, pos_perturbed, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
-        loss_local = self.pos_local_loss(node_eq_local, target_pos_local) if target_pos_local.numel() >0 else 0.0
-        loss = loss_global + loss_local
+        # target_pos_local = eq_transform(d_target[local_edge_mask], pos_perturbed, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
+        # node_eq_local = eq_transform(edge_inv_local, pos_perturbed, edge_index[:, local_edge_mask], edge_length[local_edge_mask])
+        # loss_local = self.pos_local_loss(node_eq_local, target_pos_local) if target_pos_local.numel() >0 else 0.0
+        # loss = loss_global + loss_local
         if log:
             to_log = {
                 'train_loss/pos_loss': loss.detach(),
-                'train_loss/global_pos_MSE': self.pos_global_loss.compute(),
-                'train_loss/local_pos_MSE': self.pos_local_loss.compute()
+                # 'train_loss/global_pos_MSE': self.pos_global_loss.compute(),
+                # 'train_loss/local_pos_MSE': self.pos_local_loss.compute()
                 }
             if wandb.run:
                 wandb.log(to_log, commit=True)
@@ -179,15 +179,57 @@ class DualLossDiscrete(nn.Module):
 
     def reset(self):
         self.pos_global_loss.reset()
-        self.pos_local_loss.reset()
+        # self.pos_local_loss.reset()
 
     def log_epoch_metrics(self):
         global_pos_loss = self.pos_global_loss.compute() if self.pos_global_loss.metric_b.total > 0 else -1
-        local_pos_loss = self.pos_local_loss.compute() if self.pos_local_loss.metric_b.total > 0 else -1
+        # local_pos_loss = self.pos_local_loss.compute() if self.pos_local_loss.metric_b.total > 0 else -1
         to_log = {
-            "train_epoch/global_pos_loss": global_pos_loss,
-            "train_epoch/local_pos_loss": local_pos_loss}
+            "train_epoch/global_pos_loss": global_pos_loss}
+            # "train_epoch/local_pos_loss": local_pos_loss}
         if wandb.run:
             wandb.log(to_log)
         return to_log
 
+class LEFTLossDiscrete(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.loss_pos = 10 * MeanSquaredError()
+        self.loss_atomic = 5 * MeanSquaredError()
+    
+    def forward(self, net_out, pos, atmoic_number, log:bool):
+        node_gt, pos_gt = net_out
+        # edge2graph = node2graph.index_select(0, edge_index[0])
+
+        # # Compute sigmas_edge
+        # a_edge = a.index_select(0, edge2graph)  # (E, 1)
+
+        # # Compute original and perturb distances
+        # d_or = get_distance(pos, edge_index).unsqueeze(-1)  # (E, 1)
+        # d_pt = edge_length
+        # d_target = (d_or - d_pt) / (1.0 - a_edge).sqrt() * a_edge.sqrt() # denoising direction
+        # target_pos = eq_transform(d_target, pos_perturbed, edge_index, edge_length)
+        loss_pos = self.loss_pos(pos_gt, pos)
+        loss_node = self.loss_atomic(node_gt, atmoic_number)
+        loss = loss_pos + loss_node
+        if log:
+            to_log = {
+                    'train_loss/pos_loss': loss.detach()}
+            if wandb.run:
+                wandb.log(to_log, commit=True)
+        return loss
+    
+    def reset(self):
+        self.loss_pos.reset()
+        self.loss_atomic.reset()
+
+    def log_epoch_metrics(self):
+        pos_loss = self.loss_pos.compute() if self.loss_pos.metric_b.total > 0 else -1
+        atomic_loss = self.loss_atomic.compute() if self.loss_atomic.metric_b.total > 0 else -1
+        
+        to_log = {
+            "train_epoch/pos_loss": pos_loss,
+            "train_epoch/atomic_loss": atomic_loss}
+        if wandb.run:
+            wandb.log(to_log)
+        return to_log

@@ -22,8 +22,19 @@ from rdkit.Chem import PyMol
 from PIL import ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+allowed_bonds = {'H': {0: 1, 1: 0, -1: 0},
+                 'C': {0: [3, 4], 1: 3, -1: 3},
+                 'N': {0: [2, 3], 1: [2, 3, 4], -1: 2},    # In QM9, N+ seems to be present in the form NH+ and NH2+
+                 'O': {0: 2, 1: 3, -1: 1},
+                 'F': {0: 1, -1: 0},
+                 'B': 3, 'Al': 3, 'Si': 4,
+                 'P': {0: [3, 5], 1: 4},
+                 'S': {0: [2, 6], 1: [2, 3], 2: 4, 3: 5, -1: 3},
+                 'Cl': 1, 'As': 3,
+                 'Br': {0: 1, 1: 2}, 'I': 1, 'Hg': [1, 2], 'Bi': [3, 5], 'Se': [2, 4, 6], 'Ba':[2]}
 bond_dict = [None, Chem.rdchem.BondType.SINGLE, Chem.rdchem.BondType.DOUBLE, Chem.rdchem.BondType.TRIPLE,
              Chem.rdchem.BondType.AROMATIC]
+ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
 
 class MolecularVisualization:
     def __init__(self, remove_h, dataset_infos):
@@ -49,37 +60,44 @@ class MolecularVisualization:
             a = Chem.Atom(atom_decoder[int(node_list[i])])
             molIdx = mol.AddAtom(a)
             node_to_idx[i] = molIdx
-        for ix, row in enumerate(adjacency_matrix):
-            for iy, bond in enumerate(row):
-                # only traverse half the symmetric matrix
-                if iy <= ix:
-                    continue
-                if bond == 1:
-                    bond_type = Chem.rdchem.BondType.SINGLE
-                elif bond == 2:
-                    bond_type = Chem.rdchem.BondType.DOUBLE
-                elif bond == 3:
-                    bond_type = Chem.rdchem.BondType.TRIPLE
-                elif bond == 4:
-                    bond_type = Chem.rdchem.BondType.AROMATIC
-                else:
-                    continue
-                mol.AddBond(node_to_idx[ix], node_to_idx[iy], bond_type)
+            
+        edge_types = torch.triu(adjacency_matrix, diagonal=1)
+        edge_types[edge_types == -1] = 0
+        all_bonds = torch.nonzero(edge_types)
+        for i, bond in enumerate(all_bonds):
+            if bond[0].item() != bond[1].item():
+                mol.AddBond(bond[0].item(), bond[1].item(), bond_dict[int(edge_types[bond[0], bond[1]].item())])
+        
+        # Set coordinates
+        # positions = positions.double()
         try:
             mol = mol.GetMol()
         except rdkit.Chem.KekulizeException:
             print("Can't kekulize molecule")
             return None
         
-        # Set coordinates
-        # positions = positions.double()
         if positions is not None:
-            conf = Chem.Conformer(mol.GetNumAtoms())
-            for i in range(mol.GetNumAtoms()):
-                conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
-            mol.AddConformer(conf)
+            if np.isnan(np.array(positions)).any():  #直接扔掉
+                mol, no_correct = correct_mol(mol)
+                if mol is None:
+                    return mol
+                else:
+                    mol.UpdatePropertyCache()
+                    mol = Chem.AddHs(mol)
+                    params = AllChem.ETKDG()
+                    params.useRandomCoords = True
+                    AllChem.EmbedMolecule(mol, params)
+            else:
+                conf = Chem.Conformer(mol.GetNumAtoms())   #可能顺序不一样
+                for i, p in enumerate(positions):
+                    if i in node_to_idx:
+                        molIdx = node_to_idx[i]
+                        conf.SetAtomPosition(molIdx, Point3D(p[0].item(), p[1].item(), p[2].item()))
+                    else:
+                        continue
+                mol.AddConformer(conf)
 
-        # mol, no_correct = correct_mol(mol)
+
         return mol
 
     def visualize(self, path: str, molecules: list, num_molecules_to_visualize: int, log='graph', conformer2d=None,
@@ -90,21 +108,22 @@ class MolecularVisualization:
 
         valid_molecules = []
         for i, graph in enumerate(molecules):
-            atom_types, edge_types, conformers, _ = graph
-            mol = build_molecule(atom_types, edge_types, conformers, self.dataset_infos.atom_decoder)
-            if mol2smiles(mol) is not None:
-                try:
-                    mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
-                    largest_mol = max(mol_frags, default=mol, key=lambda m: m.GetNumAtoms())
-                    valid_molecules.append(largest_mol)
-                except Chem.rdchem.AtomValenceException:
-                    print("Valence error in GetmolFrags")
-                    valid_molecules.append(None)
-                except Chem.rdchem.KekulizeException:
-                    print("Can't kekulize molecule")
-                    valid_molecules.append(None)
-                except Chem.rdchem.AtomKekulizeException:
-                    valid_molecules.append(None)
+            atom_types, edge_types, conformers, rdkit_mol = graph
+            # mol = build_molecule(atom_types, edge_types, conformers, self.dataset_infos.atom_decoder)
+            if rdkit_mol is not None:
+                if mol2smiles(rdkit_mol) is not None:
+                    try:
+                        mol_frags = Chem.rdmolops.GetMolFrags(rdkit_mol, asMols=True, sanitizeFrags=True)
+                        largest_mol = max(mol_frags, default=rdkit_mol, key=lambda m: m.GetNumAtoms())
+                        valid_molecules.append(largest_mol)
+                    except Chem.rdchem.AtomValenceException:
+                        print("Valence error in GetmolFrags")
+                    except Chem.rdchem.KekulizeException:
+                        print("Can't kekulize molecule")
+                    except Chem.rdchem.AtomKekulizeException:
+                        print("Can't kekulize atom")
+                else:
+                    continue
             else:
                 continue
         
@@ -113,20 +132,17 @@ class MolecularVisualization:
             num_molecules_to_visualize = len(valid_molecules)
             print(f"Visualizing {num_molecules_to_visualize} of {len(valid_molecules)}")
         if num_molecules_to_visualize > len(valid_molecules):
-            print(f"Shortening to {len(molecules)}")
+            print(f"Shortening to {len(valid_molecules)}")
             num_molecules_to_visualize = len(valid_molecules)
 
         all_file_paths = []
         for i in range(num_molecules_to_visualize):
-            if valid_molecules[i] is None:
-                continue
-            else:
-                file_path = os.path.join(path, f'{file_prefix}_{i}.png')
-                self.plot_save_molecule(valid_molecules[i], save_path=file_path, conformer2d=conformer2d) #conformers=conformer_list[i]
-                all_file_paths.append(file_path)
+            file_path = os.path.join(path, f'{file_prefix}_{i}.png')
+            self.plot_save_molecule(valid_molecules[i], save_path=file_path, conformer2d=conformer2d) #conformers=conformer_list[i]
+            all_file_paths.append(file_path)
 
-                if log is not None and wandb.run:
-                    wandb.log({log: wandb.Image(file_path)}, commit=True)
+            if log is not None and wandb.run:
+                wandb.log({log: wandb.Image(file_path)}, commit=True)
         
         return all_file_paths
 

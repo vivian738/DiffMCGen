@@ -25,7 +25,7 @@ class XEyTransformerLayer(nn.Module):
     """
     def __init__(self, dx: int, de: int, dy: int, n_head: int, dim_ffX: int = 2048,
                  dim_ffE: int = 128, dim_ffy: int = 2048, dropout: float = 0.2,
-                 layer_norm_eps: float = 1e-5, device=None, dtype=None) -> None:
+                 norm_eps: float = 1e-6, layer_norm_eps: float = 1e-5, device=None, dtype=None) -> None:
         kw = {'device': device, 'dtype': dtype}
         super().__init__()
 
@@ -33,7 +33,7 @@ class XEyTransformerLayer(nn.Module):
 
         self.linX1 = Linear(dx, dim_ffX, **kw)
         self.linX2 = Linear(dim_ffX, dx, **kw)
-        self.normX1 = RMSNorm(dx, epsilon=layer_norm_eps, **kw)
+        self.normX1 = RMSNorm(dx, eps=norm_eps, **kw)
         self.normX2 = LayerNorm(dx, eps=layer_norm_eps, **kw)
         self.dropoutX1 = Dropout(dropout)
         self.dropoutX2 = Dropout(dropout)
@@ -41,7 +41,7 @@ class XEyTransformerLayer(nn.Module):
 
         self.linE1 = Linear(de, dim_ffE, **kw)
         self.linE2 = Linear(dim_ffE, de, **kw)
-        self.normE1 = RMSNorm(de, epsilon=layer_norm_eps, **kw)
+        self.normE1 = RMSNorm(de, eps=norm_eps, **kw)
         self.normE2 = LayerNorm(de, eps=layer_norm_eps, **kw)
         self.dropoutE1 = Dropout(dropout)
         self.dropoutE2 = Dropout(dropout)
@@ -49,7 +49,7 @@ class XEyTransformerLayer(nn.Module):
 
         self.lin_y1 = Linear(dy, dim_ffy, **kw)
         self.lin_y2 = Linear(dim_ffy, dy, **kw)
-        self.norm_y1 = RMSNorm(dy, epsilon=layer_norm_eps, **kw)
+        self.norm_y1 = RMSNorm(dy, eps=norm_eps, **kw)
         self.norm_y2 = LayerNorm(dy, eps=layer_norm_eps, **kw)
         self.dropout_y1 = Dropout(dropout)
         self.dropout_y2 = Dropout(dropout)
@@ -65,6 +65,15 @@ class XEyTransformerLayer(nn.Module):
             node_mask: (bs, n) Mask for the src keys per batch (optional)
             Output: newX, newE, new_y with the same shape.
         """
+        # DCFormer
+        # X_, E_, y_ = self.normX1(X), self.normE1(E), self.norm_y1(y)
+        # newX, newE, new_y = self.self_attn(X_, E_, y_, node_mask=node_mask)
+        # X_h = self.normX2(X + newX)  # RMSnorm
+        # E_h = self.normE2(E + newE)
+        # y_h = self.norm_y2(y + new_y)
+        # X_out = X + newX + self.dropoutX1(self.linX2(self.activation(self.linX1(X_h)) * self.linX3(X_h))) # F.silu
+        # E_out = E + newE + self.dropoutE1(elf.linE2(self.activation(self.linE1(E_h)) * self.linE3(E_h)))
+        # y_out = y + new_y + self.dropout_y1(self.lin_y2(self.activation(self.lin_y1(y_h)) * self.lin_y3(y_h)))  # slf.lin3 = nn.linear(dim, hidden_dim)
 
         newX, newE, new_y = self.self_attn(X, E, y, node_mask=node_mask)
 

@@ -13,6 +13,7 @@ import pandas as pd
 import copy
 from torch_geometric.data import Data, InMemoryDataset
 from rdkit.Chem import AllChem
+from torch_geometric.utils import subgraph
 
 import utils as utils
 from datasets.abstract_dataset import MolecularDataModule, AbstractDatasetInfos
@@ -55,8 +56,8 @@ class EdgeComCondTransform(object):
         atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
         # print(atom_type)
         data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-
         data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
         properties = data.y
         data.y = properties[0, self.property_idx:self.property_idx+1]
 
@@ -94,8 +95,9 @@ class EdgeComCondMultiTransform(object):
         atom_type = torch.tensor(atom_type)
         # print(atom_type)
         data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-
         data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
+        
         properties = data.y
         prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
         property_data = []
@@ -187,7 +189,7 @@ class RemoveYTransform:
 
 class CSDDataset(InMemoryDataset):
 
-    def __init__(self, stage, root, prop2idx, transform=None, pre_transform=None, pre_filter=None):
+    def __init__(self, stage, root, remove_h:bool, prop2idx, transform=None, pre_transform=None, pre_filter=None):
         self.stage = stage
         if self.stage == 'train':
             self.file_idx = 0
@@ -195,6 +197,7 @@ class CSDDataset(InMemoryDataset):
             self.file_idx = 1
         else:
             self.file_idx = 2
+        self.remove_h = remove_h
         self.prop2idx = prop2idx
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[self.file_idx])
@@ -217,8 +220,10 @@ class CSDDataset(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-
-        return ['proc_tr.pt', 'proc_val.pt', 'proc_test.pt']
+        if self.remove_h:
+            return ['proc_tr_no_h.pt', 'proc_val_no_h.pt', 'proc_test_no_h.pt']
+        else:
+            return ['proc_tr_h.pt', 'proc_val_h.pt', 'proc_test_h.pt']
     def download(self):
         # 添加对药效团匹配评分以及SA， QED的计算
         # first select the best pharmacophore model
@@ -334,6 +339,17 @@ class CSDDataset(InMemoryDataset):
             # y = torch.zeros((1, 0), dtype=torch.float)
             y = target[i].unsqueeze(0)
 
+            if self.remove_h:
+                type_idx = torch.tensor(type_idx).long()
+                to_keep = type_idx > 0
+                edge_index, edge_attr = subgraph(to_keep, edge_index, edge_attr, relabel_nodes=True,
+                                                 num_nodes=len(to_keep))
+                x = x[to_keep]
+                pos = pos[to_keep]
+                # Shift onehot encoding to match atom decoder
+                x = x[:, 1:]
+                atom_type = atom_type[to_keep] 
+
             data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
                         y=y, idx=i, pos=pos, charge=torch.tensor(charges), fc=torch.tensor(formal_charges),
                         rdmol=copy.deepcopy(mol))
@@ -375,15 +391,20 @@ class CSDDataset(InMemoryDataset):
 class CSDDataModule(MolecularDataModule):
     def __init__(self, cfg):
         self.datadir = cfg.dataset.datadir
-        self.remove_h = False
+        self.remove_h = cfg.dataset.remove_h
         target = getattr(cfg.general, 'guidance_target')
         regressor = getattr(cfg.general, 'regressor')
         prop2idx =  {'glp1_score' :0, 'cav32_score':1, 'hpk1_score' :2, 'lrrk2_score' :3, 'pharma_score' :4, 'SA' :5, 'QED':6, 'acute_tox':7}
-
-        atom_encoder = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
-                        'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
-        atom_index = {1: 0, 5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
-                           35:11, 53:12, 56:13}
+        if self.remove_h:
+            atom_encoder = {'B': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'Mg': 5, 'P': 6, 
+                            'S': 7, 'Cl': 8, 'Ca': 9, 'Br': 10, 'I': 11, 'Ba': 12}
+            atom_index = {5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
+                            35:11, 53:12, 56:13}
+        else:
+            atom_encoder = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
+                            'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
+            atom_index = {1: 0, 5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
+                            35:11, 53:12, 56:13}
         if regressor and target == 'EdgeComCond':
 
             transform = EdgeComCondTransform(atom_encoder.values(), atom_index, include_aromatic=True,
@@ -398,11 +419,11 @@ class CSDDataModule(MolecularDataModule):
 
         base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
         root_path = os.path.join(base_path, self.datadir)
-        datasets = {'train': CSDDataset(stage='train', root=root_path,prop2idx=prop2idx,
+        datasets = {'train': CSDDataset(stage='train', root=root_path,remove_h = self.remove_h, prop2idx=prop2idx,
                                         transform=transform),
-                    'val': CSDDataset(stage='val', root=root_path, prop2idx=prop2idx,
+                    'val': CSDDataset(stage='val', root=root_path, remove_h = self.remove_h, prop2idx=prop2idx,
                                       transform=transform),
-                    'test': CSDDataset(stage='test', root=root_path,prop2idx=prop2idx,
+                    'test': CSDDataset(stage='test', root=root_path, remove_h = self.remove_h, prop2idx=prop2idx,
                                        transform=transform)}
         super().__init__(cfg, datasets)
 
@@ -410,34 +431,60 @@ class CSDDataModule(MolecularDataModule):
 class CSDinfos(AbstractDatasetInfos):
     def __init__(self, datamodule, cfg, recompute_statistics=False):
         self.need_to_strip = False        # to indicate whether we need to ignore one output from the model
-        self.remove_h = False
+        self.remove_h = cfg.dataset.remove_h
         self.name = 'csd'
-
-        self.atom_index = {1: 0, 5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
-                           35:11, 53:12, 56:13}
-        self.atom_encoder = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
-                             'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
-        self.atom_decoder = ['H','B', 'C', 'N', 'O', 'F', 'Mg', 'P', 
-                             'S', 'Cl', 'Ca', 'Br', 'I', 'Ba']
-        self.valencies = [1, 3, 4, 3, 2, 1, 2, 3, 2, 1, 2, 1, 1, 2]
-        self.num_atom_types = len(self.atom_decoder)
-        self.max_n_nodes = 40
-        self.max_weight = 500
-        self.atom_weights = {0: 1, 1: 11, 2: 12, 3: 14, 4: 16, 5:19, 6:24, 7:31, 8:32, 
-                             9:35, 10:40, 11:80, 12:127, 13:137}
-        self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
-        self.n_nodes = torch.tensor([0.0000, 0.0000, 0.0001, 0.0004, 0.0010, 0.0013, 0.0023, 0.0027, 0.0057,
-                                    0.0072, 0.0134, 0.0137, 0.0200, 0.0193, 0.0288, 0.0292, 0.0408, 0.0420,
-                                    0.0543, 0.0506, 0.0576, 0.0507, 0.0585, 0.0492, 0.0554, 0.0459, 0.0481,
-                                    0.0372, 0.0396, 0.0293, 0.0338, 0.0235, 0.0273, 0.0186, 0.0215, 0.0137,
-                                    0.0174, 0.0100, 0.0122, 0.0073, 0.0101])
-        self.node_types = torch.tensor([3.3095e-04, 9.1393e-04, 7.8595e-01, 5.5002e-02, 1.1528e-01, 1.2172e-02,
-                                        1.4454e-05, 3.2918e-03, 1.4168e-02, 7.4630e-03, 4.4473e-06, 4.4840e-03,
-                                        9.3394e-04, 0.0000e+00])
-        self.edge_types = torch.tensor([9.1977e-01, 5.8504e-02, 2.1344e-02, 3.8092e-04, 0.0000e+00])
-        self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
-        self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.2928e-01, 2.2961e-01, 3.8086e-01, 2.5391e-01, 2.1662e-03,
-                                                    4.1731e-03, 1.1118e-06, 1.1118e-06])
+        if self.remove_h:
+            self.atom_index = {5: 0, 6: 1, 7: 2, 8: 3, 9:4, 12:5, 15:6, 16:7, 17:8, 20:9, 
+                            35:10, 53:11, 56:12}
+            self.atom_encoder = {'B': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'Mg': 5, 'P':6, 
+                                'S': 7, 'Cl': 8, 'Ca': 9, 'Br': 10, 'I': 11, 'Ba': 12}
+            self.atom_decoder = ['B', 'C', 'N', 'O', 'F', 'Mg', 'P', 
+                                'S', 'Cl', 'Ca', 'Br', 'I', 'Ba']
+            self.valencies = [3, 4, 3, 2, 1, 2, 3, 2, 1, 2, 1, 1, 2]
+            self.num_atom_types = len(self.atom_decoder)
+            self.max_n_nodes = 40
+            self.max_weight = 600
+            self.atom_weights = {0: 11, 1: 12, 2: 14, 3: 16, 4:19, 5:24, 6:31, 7:32, 
+                                8:35, 9:40, 10:80, 11:127, 12:137}
+            self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+            self.n_nodes = torch.tensor([0.0000, 0.0000, 0.0001, 0.0004, 0.0009, 0.0013, 0.0023, 0.0026, 0.0059,
+                                        0.0072, 0.0133, 0.0140, 0.0204, 0.0195, 0.0287, 0.0292, 0.0407, 0.0420,
+                                        0.0546, 0.0504, 0.0572, 0.0507, 0.0582, 0.0496, 0.0553, 0.0457, 0.0478,
+                                        0.0367, 0.0398, 0.0297, 0.0341, 0.0234, 0.0270, 0.0186, 0.0221, 0.0138,
+                                        0.0174, 0.0102, 0.0121, 0.0073, 0.0099])
+            self.node_types = torch.tensor([3.8415e-04, 8.3435e-04, 7.8233e-01, 5.6424e-02, 1.1735e-01, 1.1164e-02,
+                                            9.6143e-06, 3.0716e-03, 1.4705e-02, 7.9167e-03, 2.9261e-06, 4.7783e-03,
+                                            1.0296e-03, 0.0000e+00])
+            self.edge_types = torch.tensor([9.1021e-01, 6.5449e-02, 2.3911e-02, 4.3119e-04, 0.0000e+00])
+            self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
+            self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.2907e-01, 2.3079e-01, 3.8297e-01, 2.5078e-01, 2.0696e-03,
+                                                        4.3273e-03, 4.1801e-07, 8.3602e-07])
+        else:
+            self.atom_index = {1: 0, 5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
+                            35:11, 53:12, 56:13}
+            self.atom_encoder = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
+                                'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
+            self.atom_decoder = ['H','B', 'C', 'N', 'O', 'F', 'Mg', 'P', 
+                                'S', 'Cl', 'Ca', 'Br', 'I', 'Ba']
+            self.valencies = [1, 3, 4, 3, 2, 1, 2, 3, 2, 1, 2, 1, 1, 2]
+            self.num_atom_types = len(self.atom_decoder)
+            self.max_n_nodes = 40
+            self.max_weight = 600
+            self.atom_weights = {0: 1, 1: 11, 2: 12, 3: 14, 4: 16, 5:19, 6:24, 7:31, 8:32, 
+                                9:35, 10:40, 11:80, 12:127, 13:137}
+            self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+            self.n_nodes = torch.tensor([0.0000, 0.0000, 0.0001, 0.0004, 0.0009, 0.0013, 0.0023, 0.0026, 0.0059,
+                                        0.0072, 0.0133, 0.0140, 0.0204, 0.0195, 0.0287, 0.0292, 0.0407, 0.0420,
+                                        0.0546, 0.0504, 0.0572, 0.0507, 0.0582, 0.0496, 0.0553, 0.0457, 0.0478,
+                                        0.0367, 0.0398, 0.0297, 0.0341, 0.0234, 0.0270, 0.0186, 0.0221, 0.0138,
+                                        0.0174, 0.0102, 0.0121, 0.0073, 0.0099])
+            self.node_types = torch.tensor([3.8415e-04, 8.3435e-04, 7.8233e-01, 5.6424e-02, 1.1735e-01, 1.1164e-02,
+                                            9.6143e-06, 3.0716e-03, 1.4705e-02, 7.9167e-03, 2.9261e-06, 4.7783e-03,
+                                            1.0296e-03, 0.0000e+00])
+            self.edge_types = torch.tensor([9.1021e-01, 6.5449e-02, 2.3911e-02, 4.3119e-04, 0.0000e+00])
+            self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
+            self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.2907e-01, 2.3079e-01, 3.8297e-01, 2.5078e-01, 2.0696e-03,
+                                                        4.3273e-03, 4.1801e-07, 8.3602e-07])
 
         if recompute_statistics or self.n_nodes is None:
             np.set_printoptions(suppress=True, precision=5)
@@ -463,16 +510,17 @@ def get_train_smiles(cfg, train_dataloader, dataset_infos, evaluate_dataset=Fals
     if evaluate_dataset:
         assert dataset_infos is not None, "If wanting to evaluate dataset, need to pass dataset_infos"
     datadir = cfg.dataset.datadir
+    remove_h = cfg.dataset.remove_h
     atom_decoder = dataset_infos.atom_decoder
     root_dir = pathlib.Path(os.path.realpath(__file__)).parents[2]
-    smiles_file_name = 'train_smiles.npy'
+    smiles_file_name = 'train_smiles_no_h.npy' if remove_h else 'train_smiles_h.npy'
     smiles_path = os.path.join(root_dir, datadir, smiles_file_name)
     if os.path.exists(smiles_path):
         print("Dataset smiles were found.")
         train_smiles = np.load(smiles_path)
     else:
         print("Computing dataset smiles...")
-        train_smiles = compute_csd_smiles(atom_decoder, train_dataloader)
+        train_smiles = compute_csd_smiles(atom_decoder, train_dataloader, remove_h)
         np.save(smiles_path, np.array(train_smiles))
 
     if evaluate_dataset:
@@ -500,11 +548,11 @@ def get_train_smiles(cfg, train_dataloader, dataset_infos, evaluate_dataset=Fals
     return train_smiles
 
 
-def compute_csd_smiles(atom_decoder, train_dataloader):
+def compute_csd_smiles(atom_decoder, train_dataloader, remove_h):
     '''
     :return:
     '''
-    print(f"\tConverting CSD dataset to SMILES ...")
+    print(f"\tConverting CSD dataset to SMILES for remove_h={remove_h}...")
 
     mols_smiles = []
     len_train = len(train_dataloader)

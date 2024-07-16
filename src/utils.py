@@ -8,7 +8,7 @@ import omegaconf
 import wandb
 from torch_geometric.utils import dense_to_sparse
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
+import torch.nn.functional as F
 
 
 def create_folders(args):
@@ -123,8 +123,8 @@ class PlaceHolder:
         x_mask = node_mask.unsqueeze(-1)          # bs, n, 1
         e_mask1 = x_mask.unsqueeze(2)             # bs, n, 1, 1
         e_mask2 = x_mask.unsqueeze(1)             # bs, 1, n, 1
-        diag_mask = ~torch.eye(n, dtype=torch.bool,
-                               device=node_mask.device).unsqueeze(0).expand(bs, -1, -1).unsqueeze(-1)  # bs, n, n, 1
+        # diag_mask = ~torch.eye(n, dtype=torch.bool,
+        #                        device=node_mask.device).unsqueeze(0).expand(bs, -1, -1).unsqueeze(-1)  # bs, n, n, 1
         if collapse:
             self.X = torch.argmax(self.X, dim=-1)
             self.E = torch.argmax(self.E, dim=-1)
@@ -133,7 +133,7 @@ class PlaceHolder:
             self.E[(e_mask1 * e_mask2).squeeze(-1) == 0] = - 1
         else:
             self.X = self.X * x_mask
-            self.E = self.E * e_mask1 * e_mask2 * diag_mask
+            self.E = self.E * e_mask1 * e_mask2 # * diag_mask
             assert torch.allclose(self.E, torch.transpose(self.E, 1, 2))
         return self
 
@@ -150,29 +150,30 @@ def prepare_context(conditioning, minibatch, property_norms):
     # batch_size = minibatch['batch'][-1] + 1
     context_node_nf = 0
     context_list = []
-    for i, key in enumerate(conditioning):
-        properties = minibatch.y[..., i]
-        properties = (properties - property_norms[key]['mean']) / property_norms[key]['mad']
-        if len(properties.size()) == 1:
-            # Global feature.
-            # assert properties.size() == (batch_size,)
-            properties = properties.index_select(0, minibatch['batch'])
-            context_list.append(properties.unsqueeze(1))
-            context_node_nf += 1
-        elif len(properties.size()) == 2 or len(properties.size()) == 3:
-            # Node feature.
-            # assert properties.size(0) == batch_size
+    # for i, key in enumerate(conditioning):
+    key=conditioning[0]
+    properties = minibatch.y[..., 0]
+    properties = (properties - property_norms[key]['mean']) / property_norms[key]['mad']
+    if len(properties.size()) == 1:
+        # Global feature.
+        # assert properties.size() == (batch_size,)
+        properties = properties.index_select(0, minibatch['batch'])
+        context_list.append(properties.unsqueeze(1))
+        context_node_nf += 1
+    elif len(properties.size()) == 2 or len(properties.size()) == 3:
+        # Node feature.
+        # assert properties.size(0) == batch_size
 
-            context_key = properties
+        context_key = properties
 
-            # Inflate if necessary.
-            if len(properties.size()) == 2:
-                context_key = context_key.unsqueeze(2)
+        # Inflate if necessary.
+        if len(properties.size()) == 2:
+            context_key = context_key.unsqueeze(2)
 
-            context_list.append(context_key)
-            context_node_nf += context_key.size(2)
-        else:
-            raise ValueError('Invalid tensor size, more than 3 axes.')
+        context_list.append(context_key)
+        context_node_nf += context_key.size(2)
+    else:
+        raise ValueError('Invalid tensor size, more than 3 axes.')
     # Concatenate
     context = torch.cat(context_list, dim=1)
     # Mask disabled nodes!
@@ -194,17 +195,12 @@ def remove_mean_with_mask(x, node_mask):
     return x
 
 def normalize_prop(y):
-    y_np = y.cpu().numpy()
+    first_col = y[:, 0]
+    y[:, 0] = (first_col - first_col.min()) / (first_col.max() - first_col.min())
 
-    # 使用 Scikit-learn 的 MinMaxScaler 进行归一化
-    scaler = MinMaxScaler()
-    for i in range(y_np.shape[1]):
-        mask = y_np[:, i] > 1
-        if np.any(mask):
-            y_np[mask, i] = scaler.fit_transform(y_np[mask, i].reshape(-1, 1)).reshape(-1)
-
-    # 转换回 PyTorch 张量
-    normalized_y = torch.from_numpy(y_np).to(y.device)
+    second_col = y[:, 1]
+    y[:, 1] = (second_col - second_col.min()) / (second_col.max() - second_col.min())
+    normalized_y = y
     return normalized_y
 
 

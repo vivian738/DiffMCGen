@@ -2,9 +2,9 @@
 type: 'discrete'
 transition: 'marginal'                          # uniform or marginal
 model: 'graph_pos_com'
-diffusion_steps: 500
+diffusion_steps: 600
 diffusion_noise_schedule: 'cosine'              # 'cosine', 'polynomial_2', 'sigmoid'
-n_layers: 12 # csd: 12 qm9:9
+n_layers: 12 # csd: 12 qm9:8
 
 
 extra_features: 'all'        # 'all', 'cycles', 'eigenvalues' or null
@@ -17,23 +17,37 @@ hidden_mlp_dims: {'X': 256, 'E': 128, 'y': 256}
 hidden_dims : {'dx': 256, 'de': 64, 'dy': 128, 'n_head': 16, 'dim_ffX': 256, 'dim_ffE': 128, 'dim_ffy': 256}
 
 # lambda_train: [0.0738, 0.2828, 0.6434]
-lambda_train: [2, 6, 2]
+lambda_train: [2, 6, 4]
 
 # EGNNSparseNetwork
-train: True
-num_convs: 6 # global 6 local 4(geom) 6(qm9) 6(csd)
-num_convs_local: 4
-num_atom: 15  # with_h: 6, without_h: 5, csd: 15, moses_no_h: 8 moses_h:9
-hidden_dim: 256
-soft_edge: True
-norm_coors: True
-mlp_act: 'relu'
+# train: True
+# num_convs: 6 # global 6 local 4(geom) 6(qm9) 6(csd)
+# num_convs_local: 4
+# num_atom: 15  # with_h: 6, without_h: 5, csd: 15, moses_no_h: 8 moses_h:9
+# hidden_dim: 256
+# soft_edge: True
+# norm_coors: True
+# mlp_act: 'relu'
+# cutoff: 10
+# num_diffusion_timesteps: 1000
+# edge_encoder: 'mlp'
+# smooth_conv: False
+# beta_schedule: 'sigmoid'
+# beta_start: 1.e-7
+# beta_end: 2.e-3
+# context: ['glp1_score', 'SA', 'QED', 'acute_tox']
+# context: ['gap', 'mu', 'SA', 'QED'] #qm9
+
+# LEFTNet
+num_layers: 4
+hidden_channels: 256
+num_radial: 64
 cutoff: 10
-num_diffusion_timesteps: 1000
-edge_encoder: 'mlp'
-smooth_conv: False
+num_atomic: 35
+pos_require_grad: True
+num_diffusion_timesteps: 700
 beta_schedule: 'sigmoid'
 beta_start: 1.e-7
 beta_end: 2.e-3
-context: ['glp1_score', 'SA', 'QED', 'acute_tox']
-# context: ['gap', 'mu', 'SA', 'QED'] #qm9
+# context: ['gap', 'mu', 'SA', 'QED']
+context: ['lrrk2_score', 'SA', 'QED', 'acute_tox']

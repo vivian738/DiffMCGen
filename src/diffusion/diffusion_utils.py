@@ -275,7 +275,7 @@ def sample_discrete_features(probX, probE, proby, node_mask):
     # Noise y
 
     # Flatten the probability tensor to sample with multinomial
-    proby = proby.reshape(bs * 1, -1).clamp(min=0)  # (bs * 1, dy_out)
+    proby = proby.reshape(bs * 1, -1).clamp(min=1e-10)  # (bs * 1, dy_out)
 
     # Sample y
     y_t = proby.multinomial(1)  # (bs * 1, 1)
@@ -492,3 +492,68 @@ def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
         t2 = (i + 1) / num_diffusion_timesteps
         betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
     return np.array(betas)
+
+class SinkhornDistance(torch.nn.Module):
+    r"""
+    Given two empirical measures each with :math:`P_1` locations
+    :math:`x\in\mathbb{R}^{D_1}` and :math:`P_2` locations :math:`y\in\mathbb{R}^{D_2}`,
+    outputs an approximation of the regularized OT cost for point clouds.
+    Args:
+        eps (float): regularization coefficient
+        max_iter (int): maximum number of Sinkhorn iterations
+        reduction (string, optional): Specifies the reduction to apply to the output:
+            'none' | 'mean' | 'sum'. 'none': no reduction will be applied,
+            'mean': the sum of the output will be divided by the number of
+            elements in the output, 'sum': the output will be summed. Default: 'none'
+    Shape:
+        - Input: :math:`(N, P_1, D_1)`, :math:`(N, P_2, D_2)`
+        - Output: :math:`(N)` or :math:`()`, depending on `reduction`
+    """
+    def __init__(self, eps=1e-3, max_iter=200, reduction='none'):
+        super(SinkhornDistance, self).__init__()
+        self.eps = eps
+        self.max_iter = max_iter
+        self.reduction = reduction
+
+    def forward(self, mu, nu, C):
+        u = torch.zeros_like(mu)
+        v = torch.zeros_like(nu)
+        # To check if algorithm terminates because of threshold
+        # or max iterations reached
+        actual_nits = 0
+        # Stopping criterion
+        thresh = 1e-1
+
+        # Sinkhorn iterations
+        for i in range(self.max_iter):
+            u1 = u  # useful to check the update
+            u = self.eps * (torch.log(mu+1e-8) - torch.logsumexp(self.M(C, u, v), dim=-1)) + u
+            v = self.eps * (torch.log(nu+1e-8) - torch.logsumexp(self.M(C, u, v).transpose(-2, -1), dim=-1)) + v
+            err = (u - u1).abs().sum(-1).mean()
+
+            actual_nits += 1
+            if err.item() < thresh:
+                break
+
+        U, V = u, v
+        # Transport plan pi = diag(a)*K*diag(b)
+        pi = torch.exp(self.M(C, U, V))
+        # Sinkhorn distance
+        cost = torch.sum(pi * C, dim=(-2, -1))
+        self.actual_nits = actual_nits
+        if self.reduction == 'mean':
+            cost = cost.mean()
+        elif self.reduction == 'sum':
+            cost = cost.sum()
+
+        return cost, pi, C
+
+    def M(self, C, u, v):
+        "Modified cost for logarithmic updates"
+        "$M_{ij} = (-c_{ij} + u_i + v_j) / \epsilon$"
+        return (-C + u.unsqueeze(-1) + v.unsqueeze(-2)) / self.eps
+
+    @staticmethod
+    def ave(u, u1, tau):
+        "Barycenter subroutine, used by kinetic acceleration through extrapolation."
+        return tau * u + (1 - tau) * u1

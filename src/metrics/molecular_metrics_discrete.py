@@ -147,7 +147,7 @@ class AtomMetricsCE(MetricCollection):
         atom_decoder = dataset_infos.atom_decoder
 
         class_dict = {'H': HydrogenCE, 'C': CarbonCE, 'N': NitroCE, 'O': OxyCE, 'F': FluorCE, 'B': BoronCE,
-                      'Br': BrCE, 'Cl': ClCE, 'I': IodineCE, 'P': PhosphorusCE, 'S': SulfurCE, 'Se': SeCE,
+                      'Br': BrCE, 'Cl': ClCE, 'I': IodineCE, 'P': PhosphorusCE, 'S': SulfurCE, 
                       'Si': SiCE, 'Ca': CalciumCE, 'Mg':MagnesiumCE, 'Ba': BariumCE}
 
         metrics_list = []

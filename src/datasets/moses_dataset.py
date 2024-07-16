@@ -87,8 +87,8 @@ class EdgeComCondTransform(object):
         atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
         # print(atom_type)
         data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-
         data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
         properties = data.y
         data.y = properties[0, self.property_idx:self.property_idx+1]
 
@@ -126,8 +126,8 @@ class EdgeComCondMultiTransform(object):
         atom_type = torch.tensor(atom_type)
         # print(atom_type)
         data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-
         data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
         properties = data.y
         prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
         property_data = []

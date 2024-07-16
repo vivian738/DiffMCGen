@@ -18,12 +18,19 @@ except ModuleNotFoundError as e:
     assert use_rdkit, "Didn't find rdkit"
 from rdkit.Geometry import Point3D
 
-allowed_bonds = {'H': 1, 'C': 4, 'N': 3, 'O': 2, 'F': 1, 'B': 3, 'Al': 3, 'Si': 4, 'P': [3, 5],
-                 'S': 4, 'Cl': 1, 'As': 3, 'Br': 1, 'I': 1, 'Hg': [1, 2], 'Bi': [3, 5], 'Se': [2, 4, 6],
-                 'Mg': 2, 'Ca': 2, 'Ba': 2}
+allowed_bonds = {'H': {0: 1, 1: 0, -1: 0},
+                 'C': {0: [3, 4], 1: 3, -1: 3},
+                 'N': {0: [2, 3], 1: [2, 3, 4], -1: 2},    # In QM9, N+ seems to be present in the form NH+ and NH2+
+                 'O': {0: 2, 1: 3, -1: 1},
+                 'F': {0: 1, -1: 0},
+                 'B': 3, 'Al': 3, 'Si': 4,
+                 'P': {0: [3, 5], 1: 4},
+                 'S': {0: [2, 6], 1: [2, 3], 2: 4, 3: 5, -1: 3},
+                 'Cl': 1, 'As': 3,
+                 'Br': {0: 1, 1: 2}, 'I': 1, 'Hg': [1, 2], 'Bi': [3, 5], 'Se': [2, 4, 6], 'Ba':[2]}
 bond_dict = [None, Chem.rdchem.BondType.SINGLE, Chem.rdchem.BondType.DOUBLE, Chem.rdchem.BondType.TRIPLE,
                  Chem.rdchem.BondType.AROMATIC]
-ATOM_VALENCY = {5: 3, 6: 4, 7: 3, 8: 2, 9: 1, 12:2, 15: 3, 16: 2, 17: 1, 20:2, 35: 1, 53: 1, 56:2}
+ATOM_VALENCY = {0: 1, 5: 3, 6: 4, 7: 3, 8: 2, 9: 1, 12:2, 15: 3, 16: 2, 17: 1, 20:2, 35: 1, 53: 1, 56:2}
 
 
 class BasicMolecularMetrics(object):
@@ -235,7 +242,7 @@ def build_molecule_with_partial_charges(atom_types, edge_types, positions, atom_
                 conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
                 mol.AddConformer(conf)
         # mol, no_correct = correct_mol(mol)
-    except Chem.KekulizeException:
+    except ValueError as e:
         print("Can't kekulize molecule")
         mol = None
     return mol
@@ -269,31 +276,46 @@ def correct_mol(m):
         if flag:
             break
         else:
-            assert len(atomid_valence) == 2
-            idx = atomid_valence[0]
-            v = atomid_valence[1]
+            idx, valence = atomid_valence
             queue = []
-            check_idx = 0
-            for b in mol.GetAtomWithIdx(idx).GetBonds():
-                type = int(b.GetBondType())
-                queue.append((b.GetIdx(), type, b.GetBeginAtomIdx(), b.GetEndAtomIdx()))
-                if type == 12:
-                    check_idx += 1
+            for bond in mol.GetAtomWithIdx(idx).GetBonds():
+                bond_type = int(bond.GetBondType())
+                queue.append((bond.GetIdx(), bond_type, bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))
+
             queue.sort(key=lambda tup: tup[1], reverse=True)
 
             if queue[-1][1] == 12:
                 return None, no_correct
             elif len(queue) > 0:
-                start = queue[check_idx][2]
-                end = queue[check_idx][3]
-                t = queue[check_idx][1] - 1
-                bond = mol.GetBondBetweenAtoms(start, end)
-                mol = Chem.EditableMol(mol)
-                if bond is not None:
-                    mol.RemoveBond(start, end)
-                if t >= 1:
-                    mol.AddBond(start, end, bond_dict[t])
-                mol = mol.GetMol()
+                for bond_info in queue:
+                    bond_idx, bond_type, start, end = bond_info
+                    if bond_type > 1:  # 只处理单键以上的键
+                        t = bond_type - 1
+                        mol = Chem.EditableMol(mol)
+                        mol.RemoveBond(start, end)
+                        if t >= 1:
+                            if bond_type == 12:
+                                mol.AddBond(start, end, bond_dict[-1])
+                            else:
+                                mol.AddBond(start, end, bond_dict[t])
+                        mol = mol.GetMol()
+                        break
+    try:
+        Chem.SanitizeMol(mol)
+    except ValueError as e:
+        return None, no_correct
+    try:
+        Chem.Kekulize(mol, clearAromaticFlags=True)
+    except Chem.rdchem.KekulizeException as e:
+        for atom in mol.GetAtoms():
+            if atom.GetIsAromatic() and not atom.IsInRing():
+                atom.SetIsAromatic(False)
+        try:
+            Chem.SanitizeMol(mol)
+            Chem.Kekulize(mol, clearAromaticFlags=True)
+        except Chem.rdchem.KekulizeException as e:
+            return None, no_correct
+
     return mol, no_correct
 
 

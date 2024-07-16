@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 class Xtoy(nn.Module):
     def __init__(self, dx, dy):
@@ -45,7 +46,7 @@ def masked_softmax(x, mask, **kwargs):
     return torch.softmax(x_masked, **kwargs)
 
 class RMSNorm(nn.Module):
-    def __init__(self, hid_dim=128, p=0.0625, epsilon=1e-6, device=None, dtype=None):
+    def __init__(self, hid_dim=128, p=0.0625, eps=1e-6, device=None, dtype=None):
         """Root Mean Square Layer Normalization
 
         Args:
@@ -56,7 +57,7 @@ class RMSNorm(nn.Module):
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.hid_dim = hid_dim
-        self.epsilon = epsilon
+        self.eps = eps
         self.p = p
         self.scale = nn.parameter.Parameter(data=torch.ones(self.hid_dim, **factory_kwargs))
 
@@ -70,9 +71,21 @@ class RMSNorm(nn.Module):
             norm_x = partial_x.norm(2, dim=-1, keepdim=True)
             d_x = partial_size
         var = norm_x * d_x ** (-1. / 2)
-        normed_inputs = inputs / (var + self.epsilon)
+        normed_inputs = inputs / (var + self.eps)
         normed_inputs = self.scale * normed_inputs
         return normed_inputs
+    # def __init__(self, dim: int, eps: float = 1e-5, device=None, dtype=None):
+    #     super().__init__()
+    #     factory_kwargs = {'device': device, 'dtype': dtype}
+    #     self.eps = eps
+    #     self.weight = nn.Parameter(data=torch.ones(dim, **factory_kwargs))
+
+    # def _norm(self, x):
+    #     return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
+
+    # def forward(self, x: Tensor) -> Tensor:
+    #     output = self._norm(x.float()).type_as(x)
+    #     return output * self.weight
 
 class RMSnormNoscale(nn.Module):
     

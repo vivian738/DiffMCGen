@@ -40,30 +40,28 @@ class DistributionProperty:
     def __init__(self, dataloader, properties, num_bins=1000, normalizer=None):
         self.num_bins = num_bins
         self.distributions = {}
-        self.properties = list(properties.keys())
+        self.properties = list(properties.keys())[0]
 
         # iterate dataset, get data nodes and corresponding properties
         num_atoms = []
         prop_values = []
-        prop_ids = torch.tensor(list(properties.values()))
+        prop_id = torch.tensor(list(properties.values()))
         for idx in tqdm(list(dataloader.dataset.indices())):
             data = dataloader.dataset.get(idx)
             tars = []
-            for prop_id in prop_ids:
-                if prop_id == 11:
-                    tars.append(dataloader.dataset.sub_Cv_thermo(data).reshape(1))
-                else:
-                    tars.append(data.y[0][prop_id].reshape(1))
+            # for prop_id in prop_ids:
+            #     if prop_id == 11:
+            #         tars.append(dataloader.dataset.sub_Cv_thermo(data).reshape(1))
+            #     else:
+            tars.append(data.y[0][prop_id])
             tars = torch.cat(tars)
             num_atoms.append(copy.deepcopy(data.rdmol).GetNumAtoms())
             prop_values.append(tars)
         num_atoms = torch.tensor(num_atoms)  # [N]
         prop_values = torch.stack(prop_values)  # [N, num_prop]
-        for i, prop in enumerate(self.properties):
-            self.distributions[prop] = {}
-            self._create_prob_dist(num_atoms,
-                                   prop_values.index_select(1, torch.tensor([i])),
-                                   self.distributions[prop])
+        # for i, prop in enumerate(self.properties):
+        self.distributions[self.properties] = {}
+        self._create_prob_dist(num_atoms, prop_values, self.distributions[self.properties])
         self.normalizer = normalizer
 
     def set_normalizer(self, normalizer):
@@ -105,12 +103,12 @@ class DistributionProperty:
 
     def sample(self, n_nodes=19):
         vals = []
-        for prop in self.properties:
-            dist = self.distributions[prop][n_nodes]
-            idx = dist['probs'].sample((1,))
-            val = self._idx2value(idx, dist['params'], len(dist['probs'].probs))
-            val = self.normalize_tensor(val, prop)
-            vals.append(val)
+        # for prop in self.properties:
+        dist = self.distributions[self.properties][n_nodes]
+        idx = dist['probs'].sample((1,))
+        val = self._idx2value(idx, dist['params'], len(dist['probs'].probs))
+        val = self.normalize_tensor(val, self.properties)
+        vals.append(val)
         vals = torch.cat(vals)
         return vals
 

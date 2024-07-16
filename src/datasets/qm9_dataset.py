@@ -61,8 +61,8 @@ class EdgeComCondTransform(object):
         atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
         # print(atom_type)
         data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-
         data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
 
         properties = data.y
         if self.property_idx == 11:
@@ -109,8 +109,8 @@ class EdgeComCondMultiTransform(object):
         atom_type = torch.tensor(atom_type)
         # print(atom_type)
         data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-
         data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
+        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
 
         properties = data.y
         prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
@@ -325,7 +325,7 @@ class QM9Dataset(InMemoryDataset):
         RDLogger.DisableLog('rdApp.*')
         types = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4}
         bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
-        charge_dict = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'S': 16, 'P': 15, 'Cl': 17, 'Br': 35, 'I': 53}
+        charge_dict = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9}
 
         target_df = pd.read_csv(self.split_paths[self.file_idx], index_col=0)
         target_df.drop(columns=['mol_id'], inplace=True)
@@ -381,6 +381,7 @@ class QM9Dataset(InMemoryDataset):
 
             x = F.one_hot(torch.tensor(type_idx), num_classes=len(types)).float()
             atom_type = torch.tensor(type_idx)
+            charges=torch.tensor(charges)
             # y = torch.zeros((1, 0), dtype=torch.float)
             y = target[i].unsqueeze(0)
 
@@ -391,12 +392,13 @@ class QM9Dataset(InMemoryDataset):
                                                  num_nodes=len(to_keep))
                 x = x[to_keep]
                 pos = pos[to_keep]
+                charges = charges[to_keep]
                 # Shift onehot encoding to match atom decoder
                 x = x[:, 1:]
                 atom_type = atom_type[to_keep] -1
 
             data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
-                        y=y, idx=i, pos=pos, charge=torch.tensor(charges), fc=torch.tensor(formal_charges),
+                        y=y, idx=i, pos=pos, charge=charges, fc=torch.tensor(formal_charges),
                         rdmol=copy.deepcopy(mol))
 
             if self.pre_filter is not None and not self.pre_filter(data):

@@ -3,3 +3,4 @@ datadir: 'data/moses/moses_pyg/'                 # Relative to the moses_dataset
 remove_h: True
 filter: False
 phore: ['Aromatic', 'Hydrophobe', 'Acceptor', 'Donor']
+atom_type_to_atomic_number: {0: 6, 1: 7, 2: 8, 3: 9, 4: 16, 5: 17, 6: 35}

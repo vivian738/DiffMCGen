@@ -133,10 +133,7 @@ def main(cfg: DictConfig):
         sampling_metrics = SamplingMolecularMetrics(dataset_infos, train_smiles)
         visualization_tools = MolecularVisualization(cfg.dataset.remove_h, dataset_infos=dataset_infos)
         prop2idx_sub = {
-            cfg.model.context[0]: dataset_infos.prop2idx[cfg.model.context[0]],
-            cfg.model.context[1]: dataset_infos.prop2idx[cfg.model.context[1]],
-            cfg.model.context[2]: dataset_infos.prop2idx[cfg.model.context[2]],
-            cfg.model.context[3]: dataset_infos.prop2idx[cfg.model.context[3]]
+            cfg.model.context[0]: dataset_infos.prop2idx[cfg.model.context[0]]
         }
         prop_norms = datamodule.train_dataset.compute_property_mean_mad(prop2idx_sub)
         prop_norms_val = datamodule.val_dataset.compute_property_mean_mad(prop2idx_sub)
@@ -199,9 +196,9 @@ def main(cfg: DictConfig):
                       enable_progress_bar=False,
                       callbacks=callbacks,
                       log_every_n_steps=50 if name != 'debug' else 1,
-                    #   precision=16,
+                    #   val_check_interval=cfg.general.val_check_interval,
                       logger=[],
-                      accumulate_grad_batches=5)
+                      accumulate_grad_batches=4)
 
     if not cfg.general.test_only:
         trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.general.resume)
