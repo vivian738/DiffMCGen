@@ -21,6 +21,7 @@ from datasets.abstract_dataset import AbstractDatasetInfos, MolecularDataModule
 
 from eval import sascorer
 from rdkit.Chem import QED, AllChem
+from torch_geometric.utils import subgraph
 from datasets.pharmacophore_eval import mol2ppgraph, match_score, get_best_match_phar_models
 from dgl.data.utils import load_graphs
 import multiprocessing
@@ -125,14 +126,13 @@ class EdgeComCondMultiTransform(object):
         # atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
         atom_type = torch.tensor(atom_type)
         # print(atom_type)
-        data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-        data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
-        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
+        # data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
+        # data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
         properties = data.y
         prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
         property_data = []
         for prop_idx in prop_list:
-            property = properties[0, prop_idx:prop_idx+1]
+            property = properties[0, prop_idx]
             property_data.append(property)
         property_ten = torch.tensor(property_data)
         data.y = property_ten.unsqueeze(0)
@@ -201,7 +201,11 @@ class MOSESDataset(InMemoryDataset):
         if self.filter_dataset:
             return ['train_filtered.pt', 'test_filtered.pt', 'test_scaffold_filtered.pt']
         else:
-            return ['train.pt', 'test.pt', 'test_scaffold.pt']
+            if self.remove_h:
+                return ['train_noh.pt', 'test_noh.pt', 'test_scaffold_noh.pt']
+            else:
+                return ['train_h.pt', 'test_h.pt', 'test_scaffold_h.pt']
+            
 
     def download(self):
 
@@ -234,7 +238,7 @@ class MOSESDataset(InMemoryDataset):
             pp_graph.ndata['h'] = \
                 torch.cat((pp_graph.ndata['type'], pp_graph.ndata['size'].reshape(-1, 1)), dim=1).float()
             pp_graph.edata['h'] = pp_graph.edata['dist'].reshape(-1, 1).float()
-        loaded_reg = joblib.load('/raid/yyw/PharmDiGress/data/stacking_regressor_model.pkl')
+        loaded_reg = joblib.load('/raid/yyw/PharmDiGress/data/stacking_regressor_model_1.pkl')
 
         path = [train_path, test_path, valid_path]
 
@@ -261,12 +265,8 @@ class MOSESDataset(InMemoryDataset):
 
     def process(self):
         RDLogger.DisableLog('rdApp.*')
-        if self.remove_h == False:
-            atom_decoder = ['H', 'C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
-            charge_dict = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'S': 16, 'Cl': 17, 'Br': 35}
-        else:
-            atom_decoder = ['C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
-            charge_dict = {'C': 6, 'N': 7, 'O': 8, 'F': 9, 'S': 16, 'Cl': 17, 'Br': 35}
+        atom_decoder = ['H', 'C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
+        charge_dict = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'S': 16, 'Cl': 17, 'Br': 35}
 
         types = {atom: i for i, atom in enumerate(atom_decoder)}
 
@@ -294,11 +294,12 @@ class MOSESDataset(InMemoryDataset):
             except ValueError:
                 continue
                 
-            mol = Chem.RemoveHs(m)
-            # mol = m
+            # mol = Chem.RemoveHs(m)
+            mol = m
             conf = mol.GetConformer()
             pos = conf.GetPositions()
             pos = torch.tensor(pos, dtype=torch.float)
+            posc = pos - pos.mean(dim=0)
 
             charges = []
             formal_charges = []
@@ -332,14 +333,26 @@ class MOSESDataset(InMemoryDataset):
             atom_type = torch.tensor(type_idx)
             # y = torch.zeros(size=(1, 0), dtype=torch.float)
             y = target[i].unsqueeze(0)
+            if self.remove_h:
+                type_idx = torch.tensor(type_idx).long()
+                to_keep = type_idx > 0
+                edge_index, edge_attr = subgraph(to_keep, edge_index, edge_attr, relabel_nodes=True,
+                                                 num_nodes=len(to_keep))
+                x = x[to_keep]
+                posc = posc[to_keep]
+                # Shift onehot encoding to match atom decoder
+                x = x[:, 1:]
+                atom_type = atom_type[to_keep] 
+                charges = torch.tensor(charges)[to_keep]
+                formal_charges = torch.tensor(formal_charges)[to_keep]
 
             data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
-                        y=y, idx=i, pos=pos, charge=torch.tensor(charges), fc=torch.tensor(formal_charges),
+                        y=y, idx=i, pos=posc, charge=charges, fc=formal_charges,
                         rdmol=copy.deepcopy(mol))
 
             if self.filter_dataset:
                 # Try to build the molecule again from the graph. If it fails, do not add it to the training set
-                dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
+                dense_data, node_mask = utils.to_dense(data.x, data.pos, data.edge_index, data.edge_attr, data.batch, data.y)
                 dense_data = dense_data.mask(node_mask, collapse=True)
                 X, E = dense_data.X, dense_data.E
 
@@ -417,7 +430,7 @@ class MosesDataModule(MolecularDataModule):
         else:
             self.atom_decoder = ['C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
             self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
-            atom_index = {6: 1, 7: 2, 16: 3, 8: 4, 9: 5, 17: 6, 35: 7}
+            atom_index = {6: 0, 7: 1, 16: 2, 8: 3, 9: 4, 17: 5, 35: 6}
         if regressor and target == 'EdgeComCond':
 
             transform = EdgeComCondTransform(self.atom_encoder.values(), atom_index, include_aromatic=True,
@@ -488,10 +501,10 @@ class MOSESinfos(AbstractDatasetInfos):
         else:
             self.atom_decoder = ['C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
             self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
-            self.atom_weights = {1: 12, 2: 14, 3: 32, 4: 16, 5: 19, 6: 35.4, 7: 79.9}
+            self.atom_weights = {0: 12, 1: 14, 2: 32, 3: 16, 4: 19, 5: 35.4, 6: 79.9}
             self.valencies = [4, 3, 4, 2, 1, 1, 1]
             self.num_atom_types = len(self.atom_decoder)
-            self.max_weight = 500
+            self.max_weight = 350
             
             meta_files = dict(n_nodes=f'{self.name}_n_counts.txt',
                             node_types=f'{self.name}_atom_types.txt',
@@ -539,17 +552,26 @@ class MOSESinfos(AbstractDatasetInfos):
         self.complete_infos(n_nodes=self.n_nodes, node_types=self.node_types)
 
 
-def get_train_smiles(cfg, datamodule, dataset_infos, evaluate_dataset=False):
+def get_train_smiles(cfg, train_dataloader, dataset_infos, evaluate_dataset=False):
     base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
-    smiles_path = os.path.join(base_path, cfg.dataset.datadir)
+    smiles_file_name = 'raw/subset_molecules.csv'
+    smiles_path = os.path.join(base_path, cfg.dataset.datadir, smiles_file_name)
 
-    train_smiles = None
     if os.path.exists(smiles_path):
         print("Dataset smiles were found.")
-        train_smiles = np.array(open(smiles_path).readlines())
+        train_smiles_ = pd.read_csv(smiles_path)['smiles'].to_list()
+        if dataset_infos.remove_h:
+            train_smiles = train_smiles_
+        else:
+            train_smiles = []
+            for smi in train_smiles_:
+                mol = Chem.MolFromSmiles(smi)
+                m = Chem.AddHs(mol)
+                s = mol2smiles(m)
+                train_smiles.append(s)
+
 
     if evaluate_dataset:
-        train_dataloader = datamodule.dataloaders['train']
         all_molecules = []
         for i, data in enumerate(tqdm(train_dataloader)):
             dense_data, node_mask = utils.to_dense(data.x, data.edge_index, data.edge_attr, data.batch, data.y)
@@ -562,7 +584,7 @@ def get_train_smiles(cfg, datamodule, dataset_infos, evaluate_dataset=False):
                 n = int(torch.sum((X != -1)[k, :]))
                 atom_types = X[k, :n].cpu()
                 edge_types = E[k, :n, :n].cpu()
-                positions = pos[k, :n, :3].cpu()
+                positions = pos[k, :n].cpu()
                 all_molecules.append([atom_types, edge_types, positions, data.rdmol])
 
         print("Evaluating the dataset -- number of molecules to evaluate", len(all_molecules))

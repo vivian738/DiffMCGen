@@ -9,6 +9,7 @@ import wandb
 from torch_geometric.utils import dense_to_sparse
 import numpy as np
 import torch.nn.functional as F
+from rdkit import Chem
 
 
 def create_folders(args):
@@ -54,8 +55,10 @@ def unnormalize(X, E, y, norm_values, norm_biases, node_mask, collapse=False):
     return PlaceHolder(X=X, E=E, y=y).mask(node_mask, collapse)
 
 
-def to_dense(x, edge_index, edge_attr, batch, y):
+def to_dense(x, pos, edge_index, edge_attr, batch, y):
     X, node_mask = to_dense_batch(x=x, batch=batch)
+    pos, _ = to_dense_batch(x=pos, batch=batch)
+    pos = pos.float()
     # node_mask = node_mask.float()
     edge_index, edge_attr = torch_geometric.utils.remove_self_loops(edge_index, edge_attr)
     # TODO: carefully check if setting node_mask as a bool breaks the continuous case
@@ -64,7 +67,7 @@ def to_dense(x, edge_index, edge_attr, batch, y):
     E = encode_no_edge(E)
     # y = torch.stack(y, dim=0)
 
-    return PlaceHolder(X=X, E=E, y=y), node_mask
+    return PlaceHolder(X=X, E=E, pos=pos, y=y), node_mask
 
 
 def encode_no_edge(E):
@@ -106,8 +109,9 @@ def update_config_with_new_keys(cfg, saved_cfg):
 
 
 class PlaceHolder:
-    def __init__(self, X, E, y):
+    def __init__(self, X, E, pos, y):
         self.X = X
+        self.pos = pos
         self.E = E
         self.y = y
 
@@ -116,10 +120,12 @@ class PlaceHolder:
         self.X = self.X.type_as(x)
         self.E = self.E.type_as(x)
         self.y = self.y.to(x.device)
+        if self.pos is not None:
+            self.pos = self.pos.to(x.device)
         return self
 
     def mask(self, node_mask, collapse=False):
-        bs, n = node_mask.shape
+        # bs, n = node_mask.shape
         x_mask = node_mask.unsqueeze(-1)          # bs, n, 1
         e_mask1 = x_mask.unsqueeze(2)             # bs, n, 1, 1
         e_mask2 = x_mask.unsqueeze(1)             # bs, 1, n, 1
@@ -133,7 +139,10 @@ class PlaceHolder:
             self.E[(e_mask1 * e_mask2).squeeze(-1) == 0] = - 1
         else:
             self.X = self.X * x_mask
-            self.E = self.E * e_mask1 * e_mask2 # * diag_mask
+            self.E = self.E * e_mask1 * e_mask2 #* diag_mask
+            if self.pos is not None:
+                self.pos = self.pos * x_mask
+                self.pos = self.pos - self.pos.mean(dim=1, keepdim=True)
             assert torch.allclose(self.E, torch.transpose(self.E, 1, 2))
         return self
 
@@ -218,13 +227,37 @@ def padding(data_list, max_nodes):
     return torch.stack(padding_list)
 
 
-def ex_batch(X, E, node_mask):
-    atom_exist = torch.argmax(X, dim=-1)
-    # weighted_tensor = node_type[atom_exist]
-    atom_type = torch.cat([X[node_mask], atom_exist[node_mask].unsqueeze(1)], dim=1)
-    edge_exist = torch.argmax(E, dim=-1) #[B. N. N]
-    edge_mask = node_mask.unsqueeze(1) * node_mask.unsqueeze(2)
-    adj = edge_exist * edge_mask
-    edge_index, edge_attr = dense_to_sparse(adj, node_mask)
-    # edge_attr = edge_type[edge_attr]
-    return atom_type, edge_index, edge_attr
+# def ex_batch(X, E, node_mask):
+#     atom_exist = torch.argmax(X, dim=-1)
+#     atom_type = torch.cat([X[node_mask], atom_exist[node_mask].unsqueeze(1)], dim=1)
+#     edge_exist = torch.argmax(E, dim=-1) #[B. N. N]
+#     edge_mask = node_mask.unsqueeze(1) * node_mask.unsqueeze(2)
+#     adj = edge_exist * edge_mask
+#     edge_index, edge_attr = dense_to_sparse(adj, node_mask)
+#     return atom_type, edge_index, edge_attr
+
+def ex_batch(node_mask):
+    num_nodes_per_graph = node_mask.sum(dim=1).tolist()
+
+    batch_batch = torch.zeros(node_mask.sum(), dtype=torch.long)
+
+    start_idx = 0
+    for graph_idx, num_nodes in enumerate(num_nodes_per_graph):
+        end_idx = start_idx + num_nodes
+        batch_batch[start_idx:end_idx] = graph_idx
+        start_idx = end_idx
+    batch_batch = batch_batch.to(node_mask.device)
+    return batch_batch
+
+def write_sdf_file(sdf_path, molecules):
+    # NOTE Changed to be compatitble with more versions of rdkit
+    #with Chem.SDWriter(str(sdf_path)) as w:
+    #    for mol in molecules:
+    #        w.write(mol)
+
+    w = Chem.SDWriter(sdf_path)
+    for m in molecules:
+        if m is not None:
+            w.write(m)
+
+    print(f'Wrote SDF file to {sdf_path}')

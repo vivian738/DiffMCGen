@@ -278,7 +278,8 @@ def match_score(mol, g):
 
     if mol is None:
         return -1
-    
+    mol.UpdatePropertyCache()
+    Chem.GetSymmSSSR(mol)
     feats = __FACTORY.GetFeaturesForMol(mol)
     dist, ref_type = extract_dgl_info(g)
 

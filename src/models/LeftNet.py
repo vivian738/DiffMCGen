@@ -10,7 +10,8 @@ from torch_geometric.nn import radius_graph
 from torch_geometric.nn.conv import MessagePassing
 from torch_scatter import scatter, scatter_mean
 from diffusion.diffusion_utils import get_timestep_embedding, get_beta_schedule
-from diffusion.layers import get_distance
+from models.layers import PositionsMLP
+from torch_geometric.utils import to_dense_batch
 
 def nan_to_num(vec, num=0.0):
     idx = torch.isnan(vec)
@@ -331,7 +332,7 @@ class LEFTNet(torch.nn.Module):
 
     """
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, property_norms):
         super(LEFTNet, self).__init__()
         self.num_layers = cfg.model.num_layers
         self.hidden_channels = cfg.model.hidden_channels
@@ -341,17 +342,18 @@ class LEFTNet(torch.nn.Module):
         self.atomic_input_dim = cfg.model.num_atomic * 2 + 1
         self.atom_type_to_atomic_number = cfg.dataset.atom_type_to_atomic_number
 
-        # self.temb = torch.nn.Module()
-        # self.temb.dense = torch.nn.ModuleList([
-        #     torch.nn.Linear(self.hidden_channels,
-        #                     self.hidden_channels * 4),
-        #     torch.nn.Linear(self.hidden_channels * 4,
-        #                     self.hidden_channels * 4),
-        # ])
-        # self.temb_proj = torch.nn.Linear(self.hidden_channels * 4,
-        #                                     self.hidden_channels)
+        self.temb = torch.nn.Module()
+        self.temb.dense = torch.nn.ModuleList([
+            torch.nn.Linear(self.hidden_channels-1,
+                            self.hidden_channels * 4),
+            torch.nn.Linear(self.hidden_channels * 4,
+                            self.hidden_channels * 4),
+        ])
+        self.temb_proj = torch.nn.Linear(self.hidden_channels * 4,
+                                            self.hidden_channels-1)
         
         self.z_emb = Embedding(self.atomic_input_dim, self.hidden_channels)
+        self.embedding_out = nn.Linear(self.hidden_channels, 1)
         self.radial_emb = rbf_emb(self.num_radial, self.cutoff)
         self.radial_lin = nn.Sequential(
             nn.Linear(self.num_radial, self.hidden_channels),
@@ -377,6 +379,8 @@ class LEFTNet(torch.nn.Module):
             self.FTEs.append(FTE(self.hidden_channels))
 
         # self.last_layer = nn.Linear(self.hidden_channels, 1)
+        self.mlp_in_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
+        self.mlp_out_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
         if self.pos_require_grad:
             self.out_forces = EquiOutput(self.hidden_channels)
         
@@ -384,23 +388,10 @@ class LEFTNet(torch.nn.Module):
         self.mean_neighbor_pos = aggregate_pos(aggr='mean')
 
         self.inv_sqrt_2 = 1 / math.sqrt(2.0)
-        # self.fc_gamma = nn.Linear(1, self.hidden_channels)
-        # self.fc_beta = nn.Linear(1, self.hidden_channels)
+        self.y_mean = property_norms[cfg.model.context[0]]['mean']
+        self.y_std = property_norms[cfg.model.context[0]]['mad']
 
         self.reset_parameters()
-
-        betas = get_beta_schedule(
-            beta_schedule=cfg.model.beta_schedule,
-            beta_start=cfg.model.beta_start,
-            beta_end=cfg.model.beta_end,
-            num_diffusion_timesteps=cfg.model.num_diffusion_timesteps,
-        )
-        betas = torch.from_numpy(betas).float()
-        self.betas = torch.nn.Parameter(betas, requires_grad=False)
-        # # variances
-        alphas = (1. - betas).cumprod(dim=0)
-        self.alphas = torch.nn.Parameter(alphas, requires_grad=False)
-        self.num_timesteps = self.betas.size(0)
 
     def reset_parameters(self):
         self.radial_emb.reset_parameters()
@@ -416,53 +407,47 @@ class LEFTNet(torch.nn.Module):
             if hasattr(layer, 'reset_parameters'):
                 layer.reset_parameters()
     
-    def egn_process(self, pos, batch):
+    def egn_process(self, pos, node_mask):
 
-        # N = atom_type.size(0)
-        node2graph = batch
-        num_graphs = node2graph[-1] + 1
+        pos_in=self.mlp_in_pos(pos, node_mask)
+        pos_perturbed = pos_in[node_mask]
+        # node2graph = batch
+        # num_graphs = node2graph[-1] + 1
 
-        # # Sample time step
-        time_step = torch.randint(
-            0, self.num_timesteps, size=(num_graphs // 2 + 1,), device=pos.device)
+        # # # Sample time step
+        # time_step = torch.randint(
+        #     0, self.num_timesteps, size=(num_graphs // 2 + 1,), device=pos.device)
         
-        time_step = torch.cat(
-            [time_step, self.num_timesteps - time_step - 1], dim=0)[:num_graphs]
-        a = self.alphas.index_select(0, time_step.long())  # (G, )
+        # time_step = torch.cat(
+        #     [time_step, self.num_timesteps - time_step - 1], dim=0)[:num_graphs]
+        # a = self.alphas.index_select(0, time_step.long())  # (G, )
 
-        a_pos = a.index_select(0, node2graph).unsqueeze(-1)  # (N, 1)
+        # a_pos = a.index_select(0, node2graph).unsqueeze(-1)  # (N, 1)
 
-        """
-        Independently
-        - Perturb pos
-        """
-        pos_noise = torch.zeros(size=pos.size(), device=pos.device)
-        pos_noise.normal_()
-        pos_perturbed = pos + center_pos(pos_noise, batch) * (1.0 - a_pos).sqrt() / a_pos.sqrt()
-        # pos_perturbed = torch.nan_to_num(pos_perturbed, nan=0, posinf=1e9, neginf=-1e9)
-        # pos_perturbed = a_pos.sqrt()*pos+(1.0 - a_pos).sqrt()*center_pos(pos_noise,batch)
+        # """
+        # Independently
+        # - Perturb pos
+        # """
+        # pos_noise = torch.zeros(size=pos.size(), device=pos.device)
+        # pos_noise.normal_()
+        # pos_perturbed = pos + center_pos(pos_noise, batch) * (1.0 - a_pos).sqrt() / a_pos.sqrt()
 
         return pos_perturbed
 
-    def forward(self, z, pos_perturbed, batch, context):
-        # if self.pos_require_grad:
-        #     pos_perturbed.requires_grad_()
-        # embed time_step for node
-        # fc_gamma = self.fc_gamma(context)
-        # fc_beta = self.fc_beta(context)
-
+    def forward(self, z, node_mask, pos_perturbed, batch, context, time_step):
+        z = z[node_mask].long()
         # atomic_nc = fc_gamma * z + fc_beta
-        context_normal = (context - context.min()) / (context.max() - context.min())
-        atomic_nc = z * (1 + context_normal.squeeze())
-        # nonlinearity = torch.nn.ReLU()
-        # temb = get_timestep_embedding(time_step, self.hidden_channels)
-        # temb = self.temb.dense[0](temb)
-        # temb = nonlinearity(temb)
-        # temb = self.temb.dense[1](temb)
-        # temb = self.temb_proj(nonlinearity(temb))  # (G, dim)
+        nonlinearity = torch.nn.ReLU()
+        temb = get_timestep_embedding(time_step.squeeze(1), self.hidden_channels - 1)
+        temb = self.temb.dense[0](temb)
+        temb = nonlinearity(temb)
+        temb = self.temb.dense[1](temb)
+        temb = self.temb_proj(nonlinearity(temb))  # (G, dim)
+        temb = temb.index_select(0, batch)  # (batch, hidden)
         # embed z
-        # z_, temb = atomic_nc.long(), temb.index_select(0, batch)
-        z_emb = self.z_emb(atomic_nc.long())   # (N, bs)
+        ctx = (context - context.min()) / (context.max() - context.min())
+        temb = torch.cat([temb, ctx], dim=1)
+        z_emb = self.z_emb(z) +  temb # (N, bs)
         
         # construct edges based on the cutoff value
         edge_index = radius_graph(pos_perturbed, r=self.cutoff, batch=batch)
@@ -487,6 +472,7 @@ class LEFTNet(torch.nn.Module):
         # bulid edge-wise frame
         edge_diff = pos_perturbed[i] - pos_perturbed[j]
         edge_diff = _normalize(edge_diff)
+        # edge_diff += temb
         edge_cross = torch.cross(pos_perturbed[i], pos_perturbed[j])
         edge_cross = _normalize(edge_cross)
         edge_vertical = torch.cross(edge_diff, edge_cross)
@@ -494,6 +480,7 @@ class LEFTNet(torch.nn.Module):
         edge_frame = torch.cat((edge_diff.unsqueeze(-1), edge_cross.unsqueeze(-1), edge_vertical.unsqueeze(-1)), dim=-1)
         
         del edge_cross, edge_vertical
+        torch.cuda.empty_cache()
         # build node-wise frame
         mean_neighbor_pos = self.mean_neighbor_pos(pos_perturbed, edge_index)
         node_diff = pos_perturbed - mean_neighbor_pos
@@ -505,6 +492,7 @@ class LEFTNet(torch.nn.Module):
         node_frame = torch.cat((node_diff.unsqueeze(-1), node_cross.unsqueeze(-1), node_vertical.unsqueeze(-1)), dim=-1)
 
         del node_cross, node_diff, node_vertical
+        torch.cuda.empty_cache()
         # LSE: local 3D substructure encoding
         # S_i_j shape: (num_nodes, 3, hidden_channels)
         S_i_j = self.S_vector(s, edge_diff.unsqueeze(-1), edge_index, radial_hidden)
@@ -513,15 +501,23 @@ class LEFTNet(torch.nn.Module):
         scalrization1[:, 1, :] = torch.abs(scalrization1[:, 1, :].clone())
         scalrization2[:, 1, :] = torch.abs(scalrization2[:, 1, :].clone())
 
-        scalar3 = (self.lin(torch.permute(scalrization1, (0, 2, 1))) + torch.permute(scalrization1, (0, 2, 1))[:, :,
-                                                                        0].unsqueeze(2)).squeeze(-1)
-        scalar4 = (self.lin(torch.permute(scalrization2, (0, 2, 1))) + torch.permute(scalrization2, (0, 2, 1))[:, :,
-                                                                        0].unsqueeze(2)).squeeze(-1)
+        perm1 = torch.permute(scalrization1, (0, 2, 1))
+        scalar3 = self.lin(perm1).add_(perm1[:, :, 0].unsqueeze(2)).squeeze(-1)
+
+        perm2 = torch.permute(scalrization2, (0, 2, 1))
+        scalar4 = self.lin(perm2).add_(perm2[:, :, 0].unsqueeze(2)).squeeze(-1)
+
+
+        # scalar3 = (self.lin(torch.permute(scalrization1, (0, 2, 1))) + torch.permute(scalrization1, (0, 2, 1))[:, :,
+        #                                                                 0].unsqueeze(2)).squeeze(-1)
+        # scalar4 = (self.lin(torch.permute(scalrization2, (0, 2, 1))) + torch.permute(scalrization2, (0, 2, 1))[:, :,
+        #                                                                 0].unsqueeze(2)).squeeze(-1)
         
         A_i_j = torch.cat((scalar3, scalar4), dim=-1) * soft_cutoff.unsqueeze(-1)
         A_i_j = torch.cat((A_i_j, radial_hidden, radial_emb), dim=-1)
         
-        del scalar3, scalar4, scalrization1, scalrization2, S_i_j
+        del scalar3, scalar4, scalrization1, scalrization2, S_i_j, perm1, perm2
+        torch.cuda.empty_cache()
         for i in range(self.num_layers):
             # equivariant message passing
             ds, dvec = self.message_layers[i](
@@ -535,44 +531,52 @@ class LEFTNet(torch.nn.Module):
             ds, dvec = self.FTEs[i](s, vec, node_frame)
             s = s + ds
             vec = vec + dvec
+            torch.cuda.empty_cache()
 
         if self.pos_require_grad:
-            node_gt, pos_gt = self.out_forces(s, vec)
+            _, pos_gt = self.out_forces(s, vec)
 
-        # s = self.last_layer(s).squeeze(1)
-        # node_ft = scatter(s, batch, dim=0)
+        h = self.embedding_out(s).squeeze(1)
+        # h = scatter(h, batch, dim=0)  #(bs,)
+        
+        h, _ = to_dense_batch(x=h, batch=batch)
+        h = h * node_mask
+        # h = h * self.y_std + self.y_mean
+        pos_gt, _ = to_dense_batch(x=pos_gt, batch=batch)
+        pos = self.mlp_out_pos(pos_gt, node_mask)
+        pos = pos * node_mask.unsqueeze(-1)
     
         if self.pos_require_grad:
-            return z + node_gt, pos_perturbed + pos_gt
+            return h, pos
         return s, vec
     
-    def sampled_dynamics_pos(self, net_out, pos, batch, i, j, t):
-        def compute_alpha(beta, t):
-            beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
-            a = (1 - beta).cumprod(dim=0).index_select(0, t + 1)  # .view(-1, 1, 1, 1)
-            return a
+    # def sampled_dynamics_pos(self, net_out, pos, batch, i, j, t):
+    #     def compute_alpha(beta, t):
+    #         beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
+    #         a = (1 - beta).cumprod(dim=0).index_select(0, t + 1)  # .view(-1, 1, 1, 1)
+    #         return a
         
-        node_gt, pos_gt = net_out
-        noise = center_pos(0.5 * torch.randn_like(pos) + 
-                           0.5 * torch.distributions.Laplace(0, 1).sample(pos.shape).to(pos.device), batch)
-        b = self.betas
-        t = t[0]
-        next_t = (torch.ones(1) * j).to(pos.device)
-        at = compute_alpha(b, t.long())
-        at_next = compute_alpha(b, next_t.long())
-        beta_t = 1 - at / at_next
-        e = -pos_gt
+    #     node_gt, pos_gt = net_out
+    #     vel = pos_gt - pos
+    #     noise = torch.randn_like(pos)
+    #     b = self.betas
+    #     t = t[0]
+    #     next_t = (torch.ones(1) * j).to(pos.device)
+    #     at = compute_alpha(b, t.long())
+    #     at_next = compute_alpha(b, next_t.long())
+    #     beta_t = 1 - at / at_next
+    #     e = -vel
 
-        pos0_from_e = (1.0 / at).sqrt() * pos - (1.0 / at - 1).sqrt() * e
-        mean = (
-            (at_next.sqrt() * beta_t) * pos0_from_e + ((1 - beta_t).sqrt() * (1 - at_next)) * pos
-                ) / (1.0 - at)
-        mask = 1 - (t == 0).float()
-        logvar = beta_t.log()
-        pos_next = mean + mask * torch.exp(
-            0.5 * logvar) * noise   
+    #     pos0_from_e = (1.0 / at).sqrt() * pos - (1.0 / at - 1).sqrt() * e
+    #     mean = (
+    #         (at_next.sqrt() * beta_t) * pos0_from_e + ((1 - beta_t).sqrt() * (1 - at_next)) * pos
+    #             ) / (1.0 - at)
+    #     mask = 1 - (t == 0).float()
+    #     logvar = beta_t.log()
+    #     pos_next = mean + mask * torch.exp(
+    #         0.5 * logvar) * noise   
         
-        return pos_next
+    #     return pos_next
 
     @property
     def num_params(self):

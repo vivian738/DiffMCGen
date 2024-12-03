@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 from torch.nn import functional as F
-from torchmetrics import Metric, MeanSquaredError
+from torchmetrics import Metric, MeanSquaredError, MeanAbsoluteError
 
 
 class TrainAbstractMetricsDiscrete(torch.nn.Module):
@@ -73,6 +73,33 @@ class SumExceptBatchMSE(MeanSquaredError):
         sum_squared_error = torch.sum(diff * diff)
         n_obs = preds.shape[0]
         return sum_squared_error, n_obs
+    
+class SumExceptBatchMAE(MeanAbsoluteError):
+    def __init__(self):
+        super().__init__()
+        
+    def update(self, preds: Tensor, target: Tensor) -> None:
+        """Update state with predictions and targets.
+
+        Args:
+            preds: Predictions from model
+            target: Ground truth values
+        """
+        assert preds.shape == target.shape
+        sum_absolute_error, n_obs = self._mean_absolute_error_update(preds, target)
+
+        self.sum_abs_error += sum_absolute_error
+        self.total += n_obs
+
+    def _mean_absolute_error_update(self, preds: Tensor, target: Tensor):
+        """ Updates and returns variables required to compute Mean absolute Error. Checks for same shape of input
+        tensors.
+            preds: Predicted tensor
+            target: Ground truth tensor
+        """
+        sum_absolute_error = torch.sum(torch.abs(preds - target))
+        n_obs = target.numel()
+        return sum_absolute_error, n_obs
 
 
 class SumExceptBatchKL(Metric):

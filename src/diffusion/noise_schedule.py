@@ -62,10 +62,15 @@ class PredefinedNoiseScheduleDiscrete(torch.nn.Module):
         self.register_buffer('betas', torch.from_numpy(betas).float())
 
         # self.alphas = 1 - torch.clamp(self.betas, min=0, max=0.9999)
-        self.alphas = (1. - torch.clamp(self.betas, min=0, max=0.9999)).cumprod(dim=0)
+        self.alphas = (1. - torch.clamp(self.betas, min=0, max=0.9999))
         log_alpha = torch.log(self.alphas)
         log_alpha_bar = torch.cumsum(log_alpha, dim=0)
+        self._log_alpha_bar = log_alpha_bar
         self.alphas_bar = torch.exp(log_alpha_bar)
+        self._sigma2_bar = -torch.expm1(2 * log_alpha_bar)
+        self._sigma_bar = torch.sqrt(self._sigma2_bar)
+        self._gamma = torch.log(-torch.special.expm1(2 * log_alpha_bar)) - 2 * log_alpha_bar
+        
         # print(f"[Noise schedule: {noise_schedule}] alpha_bar:", self.alphas_bar)
 
     def forward(self, t_normalized=None, t_int=None):
@@ -79,6 +84,44 @@ class PredefinedNoiseScheduleDiscrete(torch.nn.Module):
         if t_int is None:
             t_int = torch.round(t_normalized * self.timesteps)
         return self.alphas_bar.to(t_int.device)[t_int.long()]
+    
+    def get_sigma_bar(self, t_normalized=None, t_int=None):
+        assert int(t_normalized is None) + int(t_int is None) == 1
+        if t_int is None:
+            t_int = torch.round(t_normalized * self.timesteps)
+        return self._sigma_bar.to(t_int.device)[t_int.long()]
+    
+    def get_sigma2_bar(self, t_normalized=None, t_int=None):
+        assert int(t_normalized is None) + int(t_int is None) == 1
+        if t_int is None:
+            t_int = torch.round(t_normalized * self.timesteps)
+        return self._sigma2_bar.to(t_int.device)[t_int.long()]
+    
+    def get_alpha_pos_ts(self, t_int, s_int):
+        log_a_bar = self._log_alpha_bar.to(t_int.device)
+        ratio = torch.exp(log_a_bar[t_int.long()] - log_a_bar[s_int.long()])
+        return ratio.float()
+
+    def get_alpha_pos_ts_sq(self, t_int, s_int):
+        log_a_bar = self._log_alpha_bar.to(t_int.device)
+        ratio = torch.exp(2 * log_a_bar[t_int.long()] - 2 * log_a_bar[s_int.long()])
+        return ratio.float()
+
+
+    def get_sigma_pos_sq_ratio(self, s_int, t_int):
+        log_a_bar = self._log_alpha_bar.to(t_int.device)
+        s2_s = - torch.expm1(2 * log_a_bar[s_int.long()])
+        s2_t = - torch.expm1(2 * log_a_bar[t_int.long()])
+        ratio = torch.exp(torch.log(s2_s) - torch.log(s2_t))
+        return ratio.float()
+
+    def get_x_pos_prefactor(self, s_int, t_int):
+        """ a_s (s_t^2 - a_t_s^2 s_s^2) / s_t^2"""
+        a_s = self.get_alpha_bar(t_int=s_int)
+        alpha_ratio_sq = self.get_alpha_pos_ts_sq(t_int=t_int, s_int=s_int)
+        sigma_ratio_sq = self.get_sigma_pos_sq_ratio(s_int=s_int, t_int=t_int)
+        prefactor = a_s * (1 - alpha_ratio_sq * sigma_ratio_sq)
+        return prefactor.float()
 
 
 
@@ -116,7 +159,7 @@ class DiscreteUniformTransition:
         q_e = beta_t * self.u_e + (1 - beta_t) * torch.eye(self.E_classes, device=device).unsqueeze(0)
         q_y = beta_t * self.u_y + (1 - beta_t) * torch.eye(self.y_classes, device=device).unsqueeze(0)
 
-        return utils.PlaceHolder(X=q_x, E=q_e, y=q_y)
+        return utils.PlaceHolder(X=q_x, E=q_e, pos=None, y=q_y)
 
     def get_Qt_bar(self, alpha_bar_t, device):
         """ Returns t-step transition matrices for X and E, from step 0 to step t.
@@ -135,7 +178,7 @@ class DiscreteUniformTransition:
         q_e = alpha_bar_t * torch.eye(self.E_classes, device=device).unsqueeze(0) + (1 - alpha_bar_t) * self.u_e
         q_y = alpha_bar_t * torch.eye(self.y_classes, device=device).unsqueeze(0) + (1 - alpha_bar_t) * self.u_y
 
-        return utils.PlaceHolder(X=q_x, E=q_e, y=q_y)
+        return utils.PlaceHolder(X=q_x, E=q_e, pos=None, y=q_y)
 
 
 class MarginalUniformTransition:
@@ -168,7 +211,7 @@ class MarginalUniformTransition:
         q_e = beta_t * self.u_e + (1 - beta_t) * torch.eye(self.E_classes, device=device).unsqueeze(0)
         q_y = beta_t * self.u_y + (1 - beta_t) * torch.eye(self.y_classes, device=device).unsqueeze(0)
 
-        return utils.PlaceHolder(X=q_x, E=q_e, y=q_y)
+        return utils.PlaceHolder(X=q_x, E=q_e, pos=None, y=q_y)
 
     def get_Qt_bar(self, alpha_bar_t, device):
         """ Returns t-step transition matrices for X and E, from step 0 to step t.
@@ -187,7 +230,7 @@ class MarginalUniformTransition:
         q_e = alpha_bar_t * torch.eye(self.E_classes, device=device).unsqueeze(0) + (1 - alpha_bar_t) * self.u_e
         q_y = alpha_bar_t * torch.eye(self.y_classes, device=device).unsqueeze(0) + (1 - alpha_bar_t) * self.u_y
 
-        return utils.PlaceHolder(X=q_x, E=q_e, y=q_y)
+        return utils.PlaceHolder(X=q_x, E=q_e, pos=None, y=q_y)
 
 
 class AbsorbingStateTransition:

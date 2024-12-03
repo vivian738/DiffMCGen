@@ -24,34 +24,29 @@ class XEyTransformerLayer(nn.Module):
         layer_norm_eps: eps value in layer normalizations.
     """
     def __init__(self, dx: int, de: int, dy: int, n_head: int, dim_ffX: int = 2048,
-                 dim_ffE: int = 128, dim_ffy: int = 2048, dropout: float = 0.2,
+                 dim_ffE: int = 128, dim_ffy: int = 2048, dropout: float = 0.1,
                  norm_eps: float = 1e-6, layer_norm_eps: float = 1e-5, device=None, dtype=None) -> None:
         kw = {'device': device, 'dtype': dtype}
         super().__init__()
 
-        self.self_attn = NodeEdgeBlock(dx, de, dy, n_head, **kw)
+        self.self_attn = DCMHAttention(dx, de, dy, n_head, **kw)
+        # self.self_attn = NodeEdgeBlock(dx, de, dy, n_head, **kw)
 
         self.linX1 = Linear(dx, dim_ffX, **kw)
         self.linX2 = Linear(dim_ffX, dx, **kw)
-        self.normX1 = RMSNorm(dx, eps=norm_eps, **kw)
         self.normX2 = LayerNorm(dx, eps=layer_norm_eps, **kw)
-        self.dropoutX1 = Dropout(dropout)
         self.dropoutX2 = Dropout(dropout)
         self.dropoutX3 = Dropout(dropout)
 
         self.linE1 = Linear(de, dim_ffE, **kw)
         self.linE2 = Linear(dim_ffE, de, **kw)
-        self.normE1 = RMSNorm(de, eps=norm_eps, **kw)
         self.normE2 = LayerNorm(de, eps=layer_norm_eps, **kw)
-        self.dropoutE1 = Dropout(dropout)
         self.dropoutE2 = Dropout(dropout)
         self.dropoutE3 = Dropout(dropout)
 
         self.lin_y1 = Linear(dy, dim_ffy, **kw)
         self.lin_y2 = Linear(dim_ffy, dy, **kw)
-        self.norm_y1 = RMSNorm(dy, eps=norm_eps, **kw)
         self.norm_y2 = LayerNorm(dy, eps=layer_norm_eps, **kw)
-        self.dropout_y1 = Dropout(dropout)
         self.dropout_y2 = Dropout(dropout)
         self.dropout_y3 = Dropout(dropout)
 
@@ -66,42 +61,28 @@ class XEyTransformerLayer(nn.Module):
             Output: newX, newE, new_y with the same shape.
         """
         # DCFormer
-        # X_, E_, y_ = self.normX1(X), self.normE1(E), self.norm_y1(y)
-        # newX, newE, new_y = self.self_attn(X_, E_, y_, node_mask=node_mask)
-        # X_h = self.normX2(X + newX)  # RMSnorm
-        # E_h = self.normE2(E + newE)
-        # y_h = self.norm_y2(y + new_y)
-        # X_out = X + newX + self.dropoutX1(self.linX2(self.activation(self.linX1(X_h)) * self.linX3(X_h))) # F.silu
-        # E_out = E + newE + self.dropoutE1(elf.linE2(self.activation(self.linE1(E_h)) * self.linE3(E_h)))
-        # y_out = y + new_y + self.dropout_y1(self.lin_y2(self.activation(self.lin_y1(y_h)) * self.lin_y3(y_h)))  # slf.lin3 = nn.linear(dim, hidden_dim)
-
         newX, newE, new_y = self.self_attn(X, E, y, node_mask=node_mask)
 
-        newX_d = self.dropoutX1(newX)
-        X = self.normX1(X + newX_d)
-
-        newE_d = self.dropoutE1(newE)
-        E = self.normE1(E + newE_d)
-
-        new_y_d = self.dropout_y1(new_y)
-        y = self.norm_y1(y + new_y_d)
-
-        ff_outputX = self.linX2(self.dropoutX2(self.activation(self.linX1(X))))
+        ff_outputX = self.linX2(self.dropoutX2(self.activation(self.linX1(newX))))
         ff_outputX = self.dropoutX3(ff_outputX)
         X = self.normX2(X + ff_outputX)
 
-        ff_outputE = self.linE2(self.dropoutE2(self.activation(self.linE1(E))))
+        ff_outputE = self.linE2(self.dropoutE2(self.activation(self.linE1(newE))))
         ff_outputE = self.dropoutE3(ff_outputE)
-        E = self.normE2(E + ff_outputE)
+        E = self.normE2(E + ff_outputE) 
+        # E = 0.5 * (E + torch.transpose(E, 1, 2))
 
-        ff_output_y = self.lin_y2(self.dropout_y2(self.activation(self.lin_y1(y))))
+        ff_output_y = self.lin_y2(self.dropout_y2(self.activation(self.lin_y1(new_y))))
         ff_output_y = self.dropout_y3(ff_output_y)
         y = self.norm_y2(y + ff_output_y)
 
+        # out = utils.PlaceHolder(X=X, E=E, pos=None, y=y).mask(node_mask)
+
+        # return out.X, out.E, out.y
         return X, E, y
 
 
-class NodeEdgeBlock(nn.Module):
+class DCMHAttention(nn.Module):
     """ Self attention layer that also updates the representations on the edges. 
         DCMHA can be used in here"""
     def __init__(self, dx, de, dy, n_head, **kwargs):
@@ -110,7 +91,7 @@ class NodeEdgeBlock(nn.Module):
         self.dx = dx
         self.de = de
         self.dy = dy
-        self.df = dx // n_head
+        self.df = dx // n_head  # head_dim
         self.n_head = n_head
         
         # DCMHA
@@ -119,7 +100,7 @@ class NodeEdgeBlock(nn.Module):
         self.num_heads_per_group = self.n_head // self.num_groups
         self.dynamic_w_hidden_dim = self.n_head*4
         self.dynamic_hidden_dim =  self.num_heads_per_group // (self.n_head//2)
-        self.dw1_norm = RMSnormNoscale(dim=-1)
+        self.dw1_norm = RMSnormNoscale(dim=-1)   #stable training
         self.dw_m = nn.parameter.Parameter(torch.cat([
             torch.zeros(self.query_input_dim, self.num_groups, 4, self.dynamic_w_hidden_dim, dtype=torch.float32).reshape(self.query_input_dim, -1), 
             torch.zeros(self.query_input_dim, self.num_groups, self.num_heads_per_group * 4, dtype=torch.float32).squeeze(1)], dim=-1)) # E,(4*K + K)  K=2*N*I
@@ -129,18 +110,10 @@ class NodeEdgeBlock(nn.Module):
         self.q = Linear(dx, dx)
         self.k = Linear(dx, dx)
         self.v = Linear(dx, dx)
-
-        # FiLM E to X
-        self.e_add = Linear(de, dx)
-        self.e_mul = Linear(de, dx)
-
-        # FiLM y to E
-        self.y_e_mul = Linear(dy, dx)           # Warning: here it's dx and not de
-        self.y_e_add = Linear(dy, dx)
-
-        # FiLM y to X
-        self.y_x_mul = Linear(dy, dx)
-        self.y_x_add = Linear(dy, dx)
+        
+        self.edge_proj = nn.Linear(de, dx)
+        self.node_gate = nn.Linear(dy, dx)
+        self.edge_gate = nn.Linear(dy, dx)
 
         # Process y
         self.y_y = Linear(dy, dy)
@@ -168,15 +141,14 @@ class NodeEdgeBlock(nn.Module):
         # 1. Map X to keys and queries
         Q = self.q(X) * x_mask           # (bs, n, dx)
         K = self.k(X) * x_mask           # (bs, n, dx)
+        V = self.v(X) * x_mask                        # bs, n, dx       
         diffusion_utils.assert_correctly_masked(Q, x_mask)
         # 2. Reshape to (bs, n, n_head, df) with dx = n_head * df
 
-        Q = Q.reshape((Q.size(0), Q.size(1), self.n_head, self.df))
-        K = K.reshape((K.size(0), K.size(1), self.n_head, self.df))
+        Q = Q.contiguous().view(Q.size(0), 1, Q.size(1), self.n_head, self.df)         # (bs, 1, n, n_head, df)
+        K = K.contiguous().view(K.size(0), K.size(1), 1, self.n_head, self.df)         # (bs, n, 1, n head, df)   
+        V = V.contiguous().view(V.size(0), 1, V.size(1), self.n_head, self.df)         # (bs, 1, n, n_head, df)
 
-        Q = Q.unsqueeze(2)                              # (bs, 1, n, n_head, df)
-        K = K.unsqueeze(1)                              # (bs, n, 1, n head, df)
-        
         # DCMHA to get Y (Compose(A, Q, K, theta-pre) before softmax)
         dw_hidden, dd = (X @ self.dw_m).split([2*2*self.n_head*(2*self.dynamic_hidden_dim), 2*2*self.n_head*1], -1)  # (bs, n, df)
         dw_hidden = F.gelu(dw_hidden) 
@@ -192,25 +164,20 @@ class NodeEdgeBlock(nn.Module):
 
         # Compute unnormalized attentions. Y is (bs, n, n, n_head, df)
         Y = Q * K
-        Y = Y / math.sqrt(Y.size(-1))
+        Y = Y / math.sqrt(Q.size(-1))
         diffusion_utils.assert_correctly_masked(Y, (e_mask1 * e_mask2).unsqueeze(-1))
+
         logits = _cross_head_proj(Y, pre_qw1, pre_qw2, pre_kw1, pre_kw2, pre_qdd, pre_kdd)    # (bs, n, n, n_head, df)
         del pre_qw1, pre_qw2, pre_kw1, pre_kw2, pre_qdd, pre_kdd
 
-        E1 = self.e_mul(E) * e_mask1 * e_mask2                        # bs, n, n, dx
-        E1 = E1.reshape((E.size(0), E.size(1), E.size(2), self.n_head, self.df))
-
-        E2 = self.e_add(E) * e_mask1 * e_mask2                        # bs, n, n, dx
-        E2 = E2.reshape((E.size(0), E.size(1), E.size(2), self.n_head, self.df))
-
         # Incorporate edge features to the self attention scores.
-        logits = logits * (E1 + 1) + E2    # (bs, n, n, n_head, df)
+        E_proj = self.edge_proj(E)    #(bs, n, n, dx)
+        
+        logits = logits + E_proj    # (bs, n, n, n_head, df)
 
         # Incorporate y to E
         newE = logits.flatten(start_dim=3)                      # bs, n, n, dx
-        ye1 = self.y_e_add(y).unsqueeze(1).unsqueeze(1)  # bs, 1, 1, de
-        ye2 = self.y_e_mul(y).unsqueeze(1).unsqueeze(1)
-        newE = ye1 + (ye2 + 1) * newE
+        newE = torch.sigmoid(self.edge_gate(y)).unsqueeze(1).unsqueeze(1) * newE
 
         # Output E
         newE = self.e_out(newE) * e_mask1 * e_mask2      # bs, n, n, de
@@ -218,25 +185,22 @@ class NodeEdgeBlock(nn.Module):
 
         # Compute attentions. attn is still (bs, n, n, n_head, df)
         softmax_mask = e_mask2.expand(-1, n, -1, self.n_head)    # bs, n, n, n_head
+        # attn = masked_softmax(Y, softmax_mask, dim=2)
         probs = masked_softmax(logits, softmax_mask, dim=2)  # bs, n, n, n_head, df
         probs = _cross_head_proj(probs, post_qw1, post_qw2, post_kw1, post_kw2, post_qdd, post_kdd)
         del post_qw1, post_qw2, post_kw1, post_kw2, post_qdd, post_kdd
 
         # Compute weighted values
-        V = self.v(X) * x_mask                        # bs, n, dx                                
-        V = V.reshape((V.size(0), V.size(1), self.n_head, self.df))
-        V = V.unsqueeze(1)
-        weighted_V = probs * V  
+        # weighted_V = probs @ V  
+        weighted_V = probs * V
         weighted_V = weighted_V.sum(dim=2)
 
         # Send output to input dim
         weighted_V = weighted_V.flatten(start_dim=2)            # bs, n, dx
 
         # Incorporate y to X
-        yx1 = self.y_x_add(y).unsqueeze(1)
-        yx2 = self.y_x_mul(y).unsqueeze(1)
-        newX = yx1 + (yx2 + 1) * weighted_V
-
+        newX = torch.sigmoid(self.node_gate(y)).unsqueeze(1) * weighted_V
+        
         # Output X
         newX = self.x_out(newX) * x_mask
         diffusion_utils.assert_correctly_masked(newX, x_mask)
@@ -249,6 +213,126 @@ class NodeEdgeBlock(nn.Module):
         new_y = self.y_out(new_y)               # bs, dy
 
         return newX, newE, new_y
+    
+# class NodeEdgeBlock(nn.Module):
+#     """ Self attention layer that also updates the representations on the edges. """
+#     def __init__(self, dx, de, dy, n_head, **kwargs):
+#         super().__init__()
+#         assert dx % n_head == 0, f"dx: {dx} -- nhead: {n_head}"
+#         self.dx = dx
+#         self.de = de
+#         self.dy = dy
+#         self.df = int(dx / n_head)
+#         self.n_head = n_head
+
+#         # Attention
+#         self.q = Linear(dx, dx)
+#         self.k = Linear(dx, dx)
+#         self.v = Linear(dx, dx)
+
+#         # FiLM E to X
+#         self.e_add = Linear(de, dx)
+#         self.e_mul = Linear(de, dx)
+
+#         # FiLM y to E
+#         self.y_e_mul = Linear(dy, dx)           # Warning: here it's dx and not de
+#         self.y_e_add = Linear(dy, dx)
+
+#         # FiLM y to X
+#         self.y_x_mul = Linear(dy, dx)
+#         self.y_x_add = Linear(dy, dx)
+
+#         # Process y
+#         self.y_y = Linear(dy, dy)
+#         self.x_y = Xtoy(dx, dy)
+#         self.e_y = Etoy(de, dy)
+
+#         # Output layers
+#         self.x_out = Linear(dx, dx)
+#         self.e_out = Linear(dx, de)
+#         self.y_out = nn.Sequential(nn.Linear(dy, dy), nn.ReLU(), nn.Linear(dy, dy))
+
+#     def forward(self, X, E, y, node_mask):
+#         """
+#         :param X: bs, n, d        node features
+#         :param E: bs, n, n, d     edge features
+#         :param y: bs, dz           global features
+#         :param node_mask: bs, n
+#         :return: newX, newE, new_y with the same shape.
+#         """
+#         bs, n, _ = X.shape
+#         x_mask = node_mask.unsqueeze(-1)        # bs, n, 1
+#         e_mask1 = x_mask.unsqueeze(2)           # bs, n, 1, 1
+#         e_mask2 = x_mask.unsqueeze(1)           # bs, 1, n, 1
+
+#         # 1. Map X to keys and queries
+#         Q = self.q(X) * x_mask           # (bs, n, dx)
+#         K = self.k(X) * x_mask           # (bs, n, dx)
+#         diffusion_utils.assert_correctly_masked(Q, x_mask)
+#         # 2. Reshape to (bs, n, n_head, df) with dx = n_head * df
+
+#         Q = Q.reshape((Q.size(0), Q.size(1), self.n_head, self.df))
+#         K = K.reshape((K.size(0), K.size(1), self.n_head, self.df))
+
+#         Q = Q.unsqueeze(2)                              # (bs, 1, n, n_head, df)
+#         K = K.unsqueeze(1)                              # (bs, n, 1, n head, df)
+
+#         # Compute unnormalized attentions. Y is (bs, n, n, n_head, df)
+#         Y = Q * K
+#         Y = Y / math.sqrt(Y.size(-1))
+#         diffusion_utils.assert_correctly_masked(Y, (e_mask1 * e_mask2).unsqueeze(-1))
+
+#         E1 = self.e_mul(E) * e_mask1 * e_mask2                        # bs, n, n, dx
+#         E1 = E1.reshape((E.size(0), E.size(1), E.size(2), self.n_head, self.df))
+
+#         E2 = self.e_add(E) * e_mask1 * e_mask2                        # bs, n, n, dx
+#         E2 = E2.reshape((E.size(0), E.size(1), E.size(2), self.n_head, self.df))
+
+#         # Incorporate edge features to the self attention scores.
+#         Y = Y * (E1 + 1) + E2                  # (bs, n, n, n_head, df)
+
+#         # Incorporate y to E
+#         newE = Y.flatten(start_dim=3)                      # bs, n, n, dx
+#         ye1 = self.y_e_add(y).unsqueeze(1).unsqueeze(1)  # bs, 1, 1, de
+#         ye2 = self.y_e_mul(y).unsqueeze(1).unsqueeze(1)
+#         newE = ye1 + (ye2 + 1) * newE
+
+#         # Output E
+#         newE = self.e_out(newE) * e_mask1 * e_mask2      # bs, n, n, de
+#         diffusion_utils.assert_correctly_masked(newE, e_mask1 * e_mask2)
+
+#         # Compute attentions. attn is still (bs, n, n, n_head, df)
+#         softmax_mask = e_mask2.expand(-1, n, -1, self.n_head)    # bs, 1, n, 1
+#         attn = masked_softmax(Y, softmax_mask, dim=2)  # bs, n, n, n_head
+
+#         V = self.v(X) * x_mask                        # bs, n, dx
+#         V = V.reshape((V.size(0), V.size(1), self.n_head, self.df))
+#         V = V.unsqueeze(1)                                     # (bs, 1, n, n_head, df)
+
+#         # Compute weighted values
+#         weighted_V = attn * V
+#         weighted_V = weighted_V.sum(dim=2)
+
+#         # Send output to input dim
+#         weighted_V = weighted_V.flatten(start_dim=2)            # bs, n, dx
+
+#         # Incorporate y to X
+#         yx1 = self.y_x_add(y).unsqueeze(1)
+#         yx2 = self.y_x_mul(y).unsqueeze(1)
+#         newX = yx1 + (yx2 + 1) * weighted_V
+
+#         # Output X
+#         newX = self.x_out(newX) * x_mask
+#         diffusion_utils.assert_correctly_masked(newX, x_mask)
+
+#         # Process y based on X axnd E
+#         y = self.y_y(y)
+#         e_y = self.e_y(E)
+#         x_y = self.x_y(X)
+#         new_y = y + x_y + e_y
+#         new_y = self.y_out(new_y)               # bs, dy
+
+#         return newX, newE, new_y
 
 
 class GraphTransformer(nn.Module):
@@ -278,8 +362,7 @@ class GraphTransformer(nn.Module):
                                                             dy=hidden_dims['dy'],
                                                             n_head=hidden_dims['n_head'],
                                                             dim_ffX=hidden_dims['dim_ffX'],
-                                                            dim_ffE=hidden_dims['dim_ffE'],
-                                                            dim_ffy=hidden_dims['dim_ffy'])
+                                                            dim_ffE=hidden_dims['dim_ffE'])
                                         for i in range(n_layers)])
 
         self.mlp_out_X = nn.Sequential(nn.Linear(hidden_dims['dx'], hidden_mlp_dims['X']), act_fn_out,
@@ -305,7 +388,7 @@ class GraphTransformer(nn.Module):
 
         new_E = self.mlp_in_E(E)
         new_E = (new_E + new_E.transpose(1, 2)) / 2
-        after_in = utils.PlaceHolder(X=self.mlp_in_X(X), E=new_E, y=self.mlp_in_y(y)).mask(node_mask)
+        after_in = utils.PlaceHolder(X=self.mlp_in_X(X), E=new_E, pos=None, y=self.mlp_in_y(y)).mask(node_mask)
         X, E, y = after_in.X, after_in.E, after_in.y
         
 
@@ -322,4 +405,4 @@ class GraphTransformer(nn.Module):
 
         E = 1/2 * (E + torch.transpose(E, 1, 2))
 
-        return utils.PlaceHolder(X=X, E=E, y=y).mask(node_mask)
+        return utils.PlaceHolder(X=X, E=E, pos=None, y=y).mask(node_mask)

@@ -3,7 +3,7 @@ from torch.nn import functional as F
 import numpy as np
 import math
 
-from utils import PlaceHolder
+from utils import PlaceHolder, remove_mean_with_mask
 
 
 def sum_except_batch(x):
@@ -239,7 +239,7 @@ def check_issues_norm_values(gamma, norm_val1, norm_val2, num_stdevs=8):
             f'1 / norm_value = {1. / max_norm_value}')
 
 
-def sample_discrete_features(probX, probE, proby, node_mask):
+def sample_discrete_features(probX, probE, node_mask, proby=None):
     ''' Sample features from multinomial distribution with given probabilities (probX, probE, proby)
         :param probX: bs, n, dx_out        node features
         :param probE: bs, n, n, de_out     edge features
@@ -275,12 +275,15 @@ def sample_discrete_features(probX, probE, proby, node_mask):
     # Noise y
 
     # Flatten the probability tensor to sample with multinomial
-    proby = proby.reshape(bs * 1, -1).clamp(min=1e-10)  # (bs * 1, dy_out)
+    if proby is not None:
+        proby = proby.reshape(bs * 1, -1).clamp(min=1e-10)  # (bs * 1, dy_out)
 
-    # Sample y
-    y_t = proby.multinomial(1)  # (bs * 1, 1)
+        # Sample y
+        y_t = proby.multinomial(1)  # (bs * 1, 1)
+    else:
+        y_t = torch.zeros(bs, 4, device=X_t.device)
 
-    return PlaceHolder(X=X_t, E=E_t, y=y_t)
+    return PlaceHolder(X=X_t, E=E_t, pos=None, y=y_t)
 
 
 def compute_posterior_distribution(M, M_t, Qt_M, Qsb_M, Qtb_M):
@@ -376,12 +379,12 @@ def mask_distributions(true_X, true_E, pred_X, pred_E, node_mask):
 def posterior_distributions(X, E, y, X_t, E_t, y_t, Qt, Qsb, Qtb):
     prob_X = compute_posterior_distribution(M=X, M_t=X_t, Qt_M=Qt.X, Qsb_M=Qsb.X, Qtb_M=Qtb.X)   # (bs, n, dx)
     prob_E = compute_posterior_distribution(M=E, M_t=E_t, Qt_M=Qt.E, Qsb_M=Qsb.E, Qtb_M=Qtb.E)   # (bs, n * n, de)
-    y = y.unsqueeze(1)
-    y_t = y_t.unsqueeze(1)
-    prob_y = compute_posterior_distribution(M=y, M_t=y_t, Qt_M=Qt.y, Qsb_M=Qsb.y, Qtb_M=Qtb.y)
-    prob_y = torch.clamp(prob_y, min=0)
+    # y = y.unsqueeze(1)
+    # y_t = y_t.unsqueeze(1)
+    # prob_y = compute_posterior_distribution(M=y, M_t=y_t, Qt_M=Qt.y, Qsb_M=Qsb.y, Qtb_M=Qtb.y)
+    # prob_y = torch.clamp(prob_y, min=0)
 
-    return PlaceHolder(X=prob_X, E=prob_E, y=prob_y)
+    return PlaceHolder(X=prob_X, E=prob_E, pos =None, y=y_t)
 
 
 def sample_discrete_feature_noise(limit_dist, node_mask):
@@ -393,6 +396,7 @@ def sample_discrete_feature_noise(limit_dist, node_mask):
     U_X = x_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max)
     U_E = e_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max, n_max)
     U_y = y_limit.multinomial(1).reshape(bs, 1)
+    # U_y = torch.empty((bs, 4))
 
     long_mask = node_mask.long()
     U_X = U_X.type_as(long_mask)
@@ -413,7 +417,12 @@ def sample_discrete_feature_noise(limit_dist, node_mask):
 
     assert (U_E == torch.transpose(U_E, 1, 2)).all()
 
-    return PlaceHolder(X=U_X, E=U_E, y=U_y).mask(node_mask)
+    pos = torch.randn(node_mask.shape[0], node_mask.shape[1], 3, device=node_mask.device)
+    pos = pos * node_mask.unsqueeze(-1)
+    pos = remove_mean_with_mask(pos, node_mask)
+
+
+    return PlaceHolder(X=U_X, E=U_E, pos=pos, y=U_y).mask(node_mask)
 
 
 def get_timestep_embedding(timesteps, embedding_dim):

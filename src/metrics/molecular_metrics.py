@@ -88,7 +88,7 @@ class SamplingMolecularMetrics(nn.Module):
         self.dataset_info = di
 
     def forward(self, molecules: list, name, current_epoch, val_counter, local_rank, test=False):
-        stability, rdkit_metrics, all_smiles = compute_molecular_metrics(molecules, self.train_smiles, self.dataset_info)
+        stability, rdkit_metrics, all_smiles, molecules_new = compute_molecular_metrics(molecules, self.train_smiles, self.dataset_info)
 
         if test and local_rank == 0:
             with open(r'final_smiles.txt', 'w') as fp:
@@ -98,19 +98,19 @@ class SamplingMolecularMetrics(nn.Module):
                 print('All smiles saved')
 
         print("Starting custom metrics")
-        self.generated_n_dist(molecules)
+        self.generated_n_dist(molecules_new)
         generated_n_dist = self.generated_n_dist.compute()
         self.n_dist_mae(generated_n_dist)
 
-        self.generated_node_dist(molecules)
+        self.generated_node_dist(molecules_new)
         generated_node_dist = self.generated_node_dist.compute()
         self.node_dist_mae(generated_node_dist)
 
-        self.generated_edge_dist(molecules)
+        self.generated_edge_dist(molecules_new)
         generated_edge_dist = self.generated_edge_dist.compute()
         self.edge_dist_mae(generated_edge_dist)
 
-        self.generated_valency_dist(molecules)
+        self.generated_valency_dist(molecules_new)
         generated_valency_dist = self.generated_valency_dist.compute()
         self.valency_dist_mae(generated_valency_dist)
 
@@ -152,7 +152,7 @@ class SamplingMolecularMetrics(nn.Module):
         if local_rank == 0:
             valid_unique_molecules = rdkit_metrics[1]
             textfile = open(f'graphs/{name}/valid_unique_molecules_e{current_epoch}_b{val_counter}.txt', "w")
-            textfile.writelines(line + '\n' for line in valid_unique_molecules)
+            textfile.writelines(str(line) + '\n' for line in valid_unique_molecules)
             textfile.close()
             print("Stability metrics:", stability, "--", rdkit_metrics[0])
 
@@ -169,7 +169,7 @@ class GeneratedNDistribution(Metric):
 
     def update(self, molecules):
         for molecule in molecules:
-            atom_types, _, _, _ = molecule
+            atom_types, _, _= molecule
             n = atom_types.shape[0]
             self.n_dist[n] += 1
 
@@ -185,7 +185,7 @@ class GeneratedNodesDistribution(Metric):
 
     def update(self, molecules):
         for molecule in molecules:
-            atom_types, _, _, _ = molecule
+            atom_types, _, _ = molecule
 
             for atom_type in atom_types:
                 assert int(atom_type) != -1, "Mask error, the molecules should already be masked at the right shape"
@@ -203,7 +203,7 @@ class GeneratedEdgesDistribution(Metric):
 
     def update(self, molecules):
         for molecule in molecules:
-            _, edge_types, _, _ = molecule
+            _, edge_types, _ = molecule
             mask = torch.ones_like(edge_types)
             mask = torch.triu(mask, diagonal=1).bool()
             edge_types = edge_types[mask]
@@ -224,7 +224,7 @@ class MeanNumberEdge(Metric):
 
     def update(self, molecules, weight=1.0) -> None:
         for molecule in molecules:
-            _, edge_types, _, _ = molecule
+            _, edge_types, _  = molecule
             triu_edge_types = torch.triu(edge_types, diagonal=1)
             bonds = torch.where(triu_edge_types!=0)
             self.total_edge += len(bonds)
@@ -242,7 +242,7 @@ class ValencyDistribution(Metric):
 
     def update(self, molecules) -> None:
         for molecule in molecules:
-            _, edge_types,_, _ = molecule
+            _, edge_types,_ = molecule
             edge_types[edge_types == 4] = 1.5
             valencies = torch.sum(edge_types, dim=0)
             unique, counts = torch.unique(valencies, return_counts=True)

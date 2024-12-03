@@ -2,6 +2,14 @@ import faulthandler
 faulthandler.enable()
 import graph_tool as gt
 import os
+# os.environ["NCCL_DEBUG"] = "INFO"   #debug use
+os.environ['NCCL_DEBUG_SUBSYS'] = 'COLL'
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+os.environ['HYDRA_FULL_ERROR']='1'   #
+os.environ['NCCL_P2P_DISABLE']='1'
+os.environ["WORLD_SIZE"] = "1"
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
 import pathlib
 import warnings
 
@@ -14,8 +22,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint, DeviceStatsMonitor
 from pytorch_lightning.utilities.warnings import PossibleUserWarning
 import random
 # from pytorch_lightning.loggers import TensorBoardLogger
-# import sys
-# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import utils
 from metrics.abstract_metrics import TrainAbstractMetricsDiscrete, TrainAbstractMetrics
@@ -26,13 +34,6 @@ from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
 
 warnings.filterwarnings("ignore", category=PossibleUserWarning)
 
-# os.environ["NCCL_DEBUG"] = "INFO"   #debug use
-os.environ['NCCL_DEBUG_SUBSYS'] = 'COLL'
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-os.environ['HYDRA_FULL_ERROR']='1'   #
-os.environ['NCCL_P2P_DISABLE']='1'
-os.environ["WORLD_SIZE"] = "1"
 
 def get_resume(cfg, model_kwargs):
     """ Resumes a run. It loads previous config without allowing to update keys (used for testing). """
@@ -103,7 +104,8 @@ def main(cfg: DictConfig):
             from datasets import moses_dataset
             datamodule = moses_dataset.MosesDataModule(cfg)
             dataset_infos = moses_dataset.MOSESinfos(datamodule, cfg)
-            train_smiles = None
+            train_smiles = moses_dataset.get_train_smiles(cfg=cfg, train_dataloader=datamodule.train_dataloader(),
+                                                        dataset_infos=dataset_infos, evaluate_dataset=False)
         elif dataset_config.name == 'csd':
             from datasets import csd_dataset
             datamodule = csd_dataset.CSDDataModule(cfg)
@@ -118,7 +120,7 @@ def main(cfg: DictConfig):
             domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
         else:
             extra_features = DummyExtraFeatures()
-            domain_features = DummyExtraFeatures()
+            domain_features = ExtraMolecularFeatures(dataset_infos=dataset_infos)
 
         dataset_infos.compute_input_output_dims(datamodule=datamodule, extra_features=extra_features,
                                                 domain_features=domain_features)
@@ -162,6 +164,9 @@ def main(cfg: DictConfig):
         model = LiftedDenoisingDiffusion(cfg=cfg, **model_kwargs)
 
     callbacks = []
+    params_to_ignore = ['module.model.train_smiles', 'module.model.dataset_infos']
+
+    torch.nn.parallel.DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(model, params_to_ignore)
     if cfg.train.save_model:
         checkpoint_callback = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}",
                                               filename='{epoch}',
@@ -192,8 +197,8 @@ def main(cfg: DictConfig):
                       devices=cfg.general.gpus if use_gpu else 1,
                       max_epochs=cfg.train.n_epochs,
                       check_val_every_n_epoch=cfg.general.check_val_every_n_epochs,
-                    #   fast_dev_run=20,  # debug: True-every process circulate 5 times, int-circulate {int} times
-                      enable_progress_bar=False,
+                    #   fast_dev_run=5,  # debug: True-every process circulate 5 times, int-circulate {int} times
+                      enable_progress_bar=cfg.train.progress_bar,
                       callbacks=callbacks,
                       log_every_n_steps=50 if name != 'debug' else 1,
                     #   val_check_interval=cfg.general.val_check_interval,

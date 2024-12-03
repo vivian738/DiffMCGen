@@ -15,7 +15,7 @@ class ExtraMolecularFeatures:
 
         extra_edge_attr = torch.zeros((*noisy_data['E_t'].shape[:-1], 0)).type_as(noisy_data['E_t'])
 
-        return utils.PlaceHolder(X=torch.cat((charge, valency), dim=-1), E=extra_edge_attr, y=weight)
+        return utils.PlaceHolder(X=torch.cat((charge, valency), dim=-1), E=extra_edge_attr, pos=None, y=weight)
 
 
 class ChargeFeature:

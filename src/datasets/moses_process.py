@@ -38,7 +38,7 @@ if __name__ == '__main__':
         pp_graph.ndata['h'] = \
             torch.cat((pp_graph.ndata['type'], pp_graph.ndata['size'].reshape(-1, 1)), dim=1).float()
         pp_graph.edata['h'] = pp_graph.edata['dist'].reshape(-1, 1).float()
-    loaded_reg = joblib.load('/raid/yyw/PharmDiGress/data/stacking_regressor_model.pkl')
+    loaded_reg = joblib.load('/raid/yyw/PharmDiGress/data/stacking_regressor_model_1.pkl')
 
     train_dataset = '/raid/yyw/PharmDiGress/data/moses/moses_pyg/raw/train.csv'
     train_data = pd.read_csv(train_dataset)

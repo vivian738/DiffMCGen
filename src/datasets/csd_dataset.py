@@ -247,7 +247,7 @@ class CSDDataset(InMemoryDataset):
             pp_graph.ndata['h'] = \
                 torch.cat((pp_graph.ndata['type'], pp_graph.ndata['size'].reshape(-1, 1)), dim=1).float()
             pp_graph.edata['h'] = pp_graph.edata['dist'].reshape(-1, 1).float()
-        loaded_reg = joblib.load('/raid/yyw/PharmDiGress/data/stacking_regressor_model.pkl')
+        loaded_reg = joblib.load('/raid/yyw/PharmDiGress/data/stacking_regressor_model_1.pkl')
         suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False, sanitize=True)  
         import csv
         # 创建进程池
@@ -284,23 +284,24 @@ class CSDDataset(InMemoryDataset):
                       for line in target]
             target = torch.tensor(target, dtype=torch.float)
         f.close()
-        suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=False, sanitize=False)
+        suppl = Chem.SDMolSupplier(self.raw_paths[0], removeHs=True, sanitize=True)
         data_list = []
         for i, mol in enumerate(tqdm(suppl)):
             if i not in target_df.index or mol is None:
                 continue
-
+            mol = Chem.AddHs(mol)
             N = mol.GetNumAtoms()
             if N > 40:
                 continue
 
             check = True
-            if mol.GetConformer() is None:
+            if mol.GetNumConformers() == 0:
                 AllChem.EmbedMolecule(mol)
                 AllChem.MMFFOptimizeMolecule(mol)
             conf = mol.GetConformer()
             pos = conf.GetPositions()
             pos = torch.tensor(pos, dtype=torch.float)
+            posc = pos - pos.mean(dim=0)
 
             charges = []
             formal_charges = []
@@ -336,6 +337,7 @@ class CSDDataset(InMemoryDataset):
 
             x = F.one_hot(torch.tensor(type_idx), num_classes=len(types)).float()
             atom_type = torch.tensor(type_idx)
+            charges = torch.tensor(charges)
             # y = torch.zeros((1, 0), dtype=torch.float)
             y = target[i].unsqueeze(0)
 
@@ -349,9 +351,10 @@ class CSDDataset(InMemoryDataset):
                 # Shift onehot encoding to match atom decoder
                 x = x[:, 1:]
                 atom_type = atom_type[to_keep] 
+                charges = charges[to_keep]
 
             data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
-                        y=y, idx=i, pos=pos, charge=torch.tensor(charges), fc=torch.tensor(formal_charges),
+                        y=y, idx=i, pos=posc, charge=charges, fc=torch.tensor(formal_charges),
                         rdmol=copy.deepcopy(mol))
 
             if self.pre_filter is not None and not self.pre_filter(data):
@@ -447,18 +450,20 @@ class CSDinfos(AbstractDatasetInfos):
             self.atom_weights = {0: 11, 1: 12, 2: 14, 3: 16, 4:19, 5:24, 6:31, 7:32, 
                                 8:35, 9:40, 10:80, 11:127, 12:137}
             self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
-            self.n_nodes = torch.tensor([0.0000, 0.0000, 0.0001, 0.0004, 0.0009, 0.0013, 0.0023, 0.0026, 0.0059,
-                                        0.0072, 0.0133, 0.0140, 0.0204, 0.0195, 0.0287, 0.0292, 0.0407, 0.0420,
-                                        0.0546, 0.0504, 0.0572, 0.0507, 0.0582, 0.0496, 0.0553, 0.0457, 0.0478,
-                                        0.0367, 0.0398, 0.0297, 0.0341, 0.0234, 0.0270, 0.0186, 0.0221, 0.0138,
-                                        0.0174, 0.0102, 0.0121, 0.0073, 0.0099])
-            self.node_types = torch.tensor([3.8415e-04, 8.3435e-04, 7.8233e-01, 5.6424e-02, 1.1735e-01, 1.1164e-02,
-                                            9.6143e-06, 3.0716e-03, 1.4705e-02, 7.9167e-03, 2.9261e-06, 4.7783e-03,
-                                            1.0296e-03, 0.0000e+00])
-            self.edge_types = torch.tensor([9.1021e-01, 6.5449e-02, 2.3911e-02, 4.3119e-04, 0.0000e+00])
+            self.n_nodes = torch.tensor([0.0000e+00, 0.0000e+00, 3.7631e-04, 9.4830e-04, 2.0170e-03, 2.8148e-03,
+                                        5.1479e-03, 5.5543e-03, 1.2779e-02, 1.4872e-02, 2.7832e-02, 2.9141e-02,
+                                        4.2342e-02, 4.0777e-02, 5.9803e-02, 6.0856e-02, 8.3495e-02, 8.3510e-02,
+                                        1.0476e-01, 9.1277e-02, 9.3987e-02, 7.1438e-02, 6.6034e-02, 3.7616e-02,
+                                        3.0812e-02, 1.3171e-02, 9.1368e-03, 3.0707e-03, 2.6342e-03, 7.6767e-04,
+                                        1.1139e-03, 2.5589e-04, 5.4188e-04, 1.9568e-04, 4.0641e-04, 1.0537e-04,
+                                        2.1073e-04, 6.0209e-05, 3.0105e-05, 6.0209e-05, 4.5157e-05])
+            self.node_types = torch.tensor([6.1698e-04, 7.3823e-01, 7.2801e-02, 1.2315e-01, 1.7945e-02, 1.6145e-05,
+                                            2.5314e-03, 2.0910e-02, 1.3963e-02, 3.4597e-06, 7.8282e-03, 2.0066e-03,
+                                            0.0000e+00])
+            self.edge_types = torch.tensor([0.8771, 0.0590, 0.0109, 0.0009, 0.0521])
             self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
-            self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.2907e-01, 2.3079e-01, 3.8297e-01, 2.5078e-01, 2.0696e-03,
-                                                        4.3273e-03, 4.1801e-07, 8.3602e-07])
+            self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.3238e-01, 2.0985e-01, 3.8483e-01, 2.6112e-01, 7.4222e-03,
+                                                        4.3973e-03, 0.0000e+00, 2.3065e-06])
         else:
             self.atom_index = {1: 0, 5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
                             35:11, 53:12, 56:13}
@@ -469,7 +474,7 @@ class CSDinfos(AbstractDatasetInfos):
             self.valencies = [1, 3, 4, 3, 2, 1, 2, 3, 2, 1, 2, 1, 1, 2]
             self.num_atom_types = len(self.atom_decoder)
             self.max_n_nodes = 40
-            self.max_weight = 600
+            self.max_weight = 500
             self.atom_weights = {0: 1, 1: 11, 2: 12, 3: 14, 4: 16, 5:19, 6:24, 7:31, 8:32, 
                                 9:35, 10:40, 11:80, 12:127, 13:137}
             self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}

@@ -40,7 +40,7 @@ class DistributionProperty:
     def __init__(self, dataloader, properties, num_bins=1000, normalizer=None):
         self.num_bins = num_bins
         self.distributions = {}
-        self.properties = list(properties.keys())[0]
+        self.properties = list(properties.keys())[0]   # qm9: gap [1]
 
         # iterate dataset, get data nodes and corresponding properties
         num_atoms = []

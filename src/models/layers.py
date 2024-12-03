@@ -37,7 +37,21 @@ class Etoy(nn.Module):
         out = self.lin(z)
         return out
 
+class PositionsMLP(nn.Module):
+    def __init__(self, hidden_dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.mlp = nn.Sequential(nn.Linear(1, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
 
+    def forward(self, pos, node_mask):
+        norm = torch.norm(pos, dim=-1, keepdim=True)           # bs, n, 1
+        new_norm = self.mlp(norm)                              # bs, n, 1
+        new_pos = pos * new_norm / (norm + self.eps)
+        new_pos = new_pos * node_mask.unsqueeze(-1)
+        new_pos = new_pos - torch.mean(new_pos, dim=1, keepdim=True)
+        return new_pos
+    
+    
 def masked_softmax(x, mask, **kwargs):
     if mask.sum() == 0:
         return x
@@ -114,3 +128,15 @@ def _cross_head_proj(inputs, qw1, qw2, kw1, kw2, qdd, kdd):
     qdout = inputs * qdd.unsqueeze(2).unsqueeze(-1); out = out + qdout  # BTSNK,(BTN->BT1N1)->BNTS
     kdout = inputs * kdd.unsqueeze(1).unsqueeze(-1); out = out + kdout  # BTSNK,(BSN->B1SN1)->BNTS
     return out
+# def _cross_head_proj(inputs, qw1, qw2, kw1, kw2, qdd, kdd):
+#     out = inputs
+#     for i in range(2): # qw1.shape[-2]):
+#         qhidden = (inputs * qw1[..., i, :].transpose(-2, -1).unsqueeze(-1)).sum(1)  # BNTS,(BTN->BNT->BNT1)->BNTS->BTS
+#         qout = qhidden.unsqueeze(1) * qw2[..., i, :].transpose(-2, -1).unsqueeze(-1) # (BTS->B1TS),(BTN->BNT->BNT1)->BNTS
+#         out = out + qout
+#         khidden = (inputs * kw1[..., i, :].transpose(-2, -1).unsqueeze(-2)).sum(1)  # BNTS,(BSN->BNS->BN1S)->BNTS->BTS
+#         kout = khidden.unsqueeze(1) * kw2[..., i, :].transpose(-2, -1).unsqueeze(-2) # (BTS->B1TS),(BSN->BNS->BNS1)->BNTS
+#         out = out + kout
+#     qdout = inputs * qdd.transpose(-2, -1).unsqueeze(-1); out = out + qdout  # BNTS,(BTN->BNT->BNT1)->BNTS
+#     kdout = inputs * kdd.transpose(-2, -1).unsqueeze(-2); out = out + kdout  # BNTS,(BSN->BNS->BN1S)->BNTS
+#     return out

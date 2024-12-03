@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 import torch.nn as nn
-from torchmetrics import Metric, MeanSquaredError, MetricCollection
+from torchmetrics import Metric, MeanSquaredError, MetricCollection, MeanAbsoluteError
 import time
 import wandb
 from metrics.abstract_metrics import SumExceptBatchMetric, SumExceptBatchMSE, SumExceptBatchKL, CrossEntropyMetric, \
@@ -67,7 +67,7 @@ class TrainLossDiscrete(nn.Module):
         super().__init__()
         self.node_loss = CrossEntropyMetric()
         self.edge_loss = CrossEntropyMetric()
-        self.y_loss = MeanSquaredError()
+        self.y_loss = CrossEntropyMetric()
         # self.cross_active_edge = CrossEntropyMetric()
         self.lambda_train = lambda_train
 
@@ -101,11 +101,10 @@ class TrainLossDiscrete(nn.Module):
         # cross_edge = self.cross_active_edge(active_edge_t0.exp(), flat_true_E) if true_E.numel() > 0 else 0.0
 
         if log:
-            to_log = {"train_loss/batch_CE": (loss_X + loss_E + loss_y).detach(),
-                      "train_loss/X_CE": self.node_loss.compute() if true_X.numel() > 0 else -1,
-                      "train_loss/E_CE": self.edge_loss.compute() if true_E.numel() > 0 else -1,
-                      "train_loss/y_MSE": self.y_loss.compute() if true_y.numel() > 0 else -1}
-                    #   'train_loss/cross_active_edge': self.cross_active_edge.compute() if true_E.numel() > 0 else -1}
+            to_log = {"train_loss/batch_CE": (self.lambda_train[0] * loss_X + self.lambda_train[1] * loss_E  + self.lambda_train[2] * loss_y).detach(),
+                      "train_loss/X_CE": self.lambda_train[0] *self.node_loss.compute() if true_X.numel() > 0 else -1,
+                      "train_loss/E_CE": self.lambda_train[1] *self.edge_loss.compute() if true_E.numel() > 0 else -1,
+                      "train_loss/y_CE": self.lambda_train[2] *self.y_loss.compute() if true_y.numel() > 0 else -1}
             if wandb.run:
                 wandb.log(to_log, commit=True)
         return self.lambda_train[0] * loss_X + self.lambda_train[1] * loss_E  + self.lambda_train[2] * loss_y
@@ -117,11 +116,11 @@ class TrainLossDiscrete(nn.Module):
     def log_epoch_metrics(self):
         epoch_node_loss = self.node_loss.compute() if self.node_loss.total_samples > 0 else -1
         epoch_edge_loss = self.edge_loss.compute() if self.edge_loss.total_samples > 0 else -1
-        epoch_y_loss = self.y_loss.compute() if self.y_loss.total > 0 else -1
+        epoch_y_loss = self.y_loss.compute() if self.y_loss.total_samples > 0 else -1
 
         to_log = {"train_epoch/X_CE": epoch_node_loss,
                   "train_epoch/E_CE": epoch_edge_loss,
-                  "train_epoch/y_MSE": epoch_y_loss}
+                  "train_epoch/y_CE": epoch_y_loss}
         if wandb.run:
             wandb.log(to_log, commit=False)
 
@@ -168,14 +167,14 @@ class DualLossDiscrete(nn.Module):
         # loss = loss_global + loss_local
         if log:
             to_log = {
-                'train_loss/pos_loss': loss.detach(),
+                'train_loss/pos_loss': (5 *loss).detach(),
                 # 'train_loss/global_pos_MSE': self.pos_global_loss.compute(),
                 # 'train_loss/local_pos_MSE': self.pos_local_loss.compute()
                 }
             if wandb.run:
                 wandb.log(to_log, commit=True)
 
-        return loss
+        return 5 * loss
 
     def reset(self):
         self.pos_global_loss.reset()
@@ -194,42 +193,36 @@ class DualLossDiscrete(nn.Module):
 class LEFTLossDiscrete(nn.Module):
     def __init__(self):
         super().__init__()
-        self.loss_pos = 10 * MeanSquaredError()
-        self.loss_atomic = 5 * MeanSquaredError()
+        self.loss_pos = MeanSquaredError(sync_on_compute=False, dist_sync_on_step=False)
+        self.loss_cond = MeanAbsoluteError()
     
-    def forward(self, net_out, pos, atmoic_number, log:bool):
+    def forward(self, net_out, pos, context, node_mask, log:bool):
         node_gt, pos_gt = net_out
-        # edge2graph = node2graph.index_select(0, edge_index[0])
-
-        # # Compute sigmas_edge
-        # a_edge = a.index_select(0, edge2graph)  # (E, 1)
-
-        # # Compute original and perturb distances
-        # d_or = get_distance(pos, edge_index).unsqueeze(-1)  # (E, 1)
-        # d_pt = edge_length
-        # d_target = (d_or - d_pt) / (1.0 - a_edge).sqrt() * a_edge.sqrt() # denoising direction
-        # target_pos = eq_transform(d_target, pos_perturbed, edge_index, edge_length)
-        loss_pos = self.loss_pos(pos_gt, pos)
-        loss_node = self.loss_atomic(node_gt, atmoic_number)
-        loss = loss_pos + loss_node
+        vel = pos_gt - pos
+        if torch.any(torch.isnan(vel)):
+            print("Warning: detected nan in pos, resetting EGNN output to randn.")
+            pos_gt = vel + torch.randn_like(vel) * 1e-6 + pos
+        loss_pos = self.loss_pos(pos_gt[node_mask], pos[node_mask])
+        loss_cond = self.loss_cond(node_gt[node_mask], context)
+        loss = 5 * loss_pos + loss_cond
         if log:
             to_log = {
-                    'train_loss/pos_loss': loss.detach()}
+                    'train_loss/model2_loss': loss.detach()}
             if wandb.run:
                 wandb.log(to_log, commit=True)
         return loss
     
     def reset(self):
         self.loss_pos.reset()
-        self.loss_atomic.reset()
+        self.loss_cond.reset()
 
     def log_epoch_metrics(self):
-        pos_loss = self.loss_pos.compute() if self.loss_pos.metric_b.total > 0 else -1
-        atomic_loss = self.loss_atomic.compute() if self.loss_atomic.metric_b.total > 0 else -1
+        pos_loss = self.loss_pos.compute() if self.loss_pos.total > 0 else -1
+        cond_loss = self.loss_cond.compute() if self.loss_cond.total > 0 else -1
         
         to_log = {
             "train_epoch/pos_loss": pos_loss,
-            "train_epoch/atomic_loss": atomic_loss}
+            "train_epoch/cond_loss": cond_loss}
         if wandb.run:
             wandb.log(to_log)
         return to_log

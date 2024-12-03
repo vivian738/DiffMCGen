@@ -352,6 +352,7 @@ class QM9Dataset(InMemoryDataset):
             conf = mol.GetConformer()
             pos = conf.GetPositions()
             pos = torch.tensor(pos, dtype=torch.float)
+            posc = pos - pos.mean(dim=0)
 
             charges = []
             formal_charges = []
@@ -398,7 +399,7 @@ class QM9Dataset(InMemoryDataset):
                 atom_type = atom_type[to_keep] -1
 
             data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
-                        y=y, idx=i, pos=pos, charge=charges, fc=torch.tensor(formal_charges),
+                        y=y, idx=i, pos=posc, charge=charges, fc=torch.tensor(formal_charges),
                         rdmol=copy.deepcopy(mol))
 
             if self.pre_filter is not None and not self.pre_filter(data):

@@ -2,7 +2,7 @@ import math
 import torch
 from torch_scatter import scatter_add, scatter_mean
 from rdkit import Chem
-from rdkit.Chem import rdMolTransforms
+# from rdkit.Chem import rdMolTransforms
 
 
 class SinusoidalPosEmb(torch.nn.Module):
