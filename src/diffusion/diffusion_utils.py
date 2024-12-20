@@ -62,7 +62,7 @@ def cosine_beta_schedule(timesteps, s=0.008, raise_to_power: float = 1):
     return alphas_cumprod
 
 
-def cosine_beta_schedule_discrete(timesteps, s=0.008):
+def cosine_beta_schedule_discrete(timesteps, s=0.01):
     """ Cosine schedule as proposed in https://openreview.net/forum?id=-NEXDKk8gZ. """
     steps = timesteps + 2
     x = np.linspace(0, steps, steps)
@@ -71,6 +71,8 @@ def cosine_beta_schedule_discrete(timesteps, s=0.008):
     alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
     alphas = (alphas_cumprod[1:] / alphas_cumprod[:-1])
     betas = 1 - alphas
+    betas = np.clip(betas, 1e-6, 0.02)
+
     return betas.squeeze()
 
 
@@ -239,7 +241,7 @@ def check_issues_norm_values(gamma, norm_val1, norm_val2, num_stdevs=8):
             f'1 / norm_value = {1. / max_norm_value}')
 
 
-def sample_discrete_features(probX, probE, node_mask, proby=None):
+def sample_discrete_features(probX, probE, node_mask):
     ''' Sample features from multinomial distribution with given probabilities (probX, probE, proby)
         :param probX: bs, n, dx_out        node features
         :param probE: bs, n, n, de_out     edge features
@@ -275,13 +277,13 @@ def sample_discrete_features(probX, probE, node_mask, proby=None):
     # Noise y
 
     # Flatten the probability tensor to sample with multinomial
-    if proby is not None:
-        proby = proby.reshape(bs * 1, -1).clamp(min=1e-10)  # (bs * 1, dy_out)
+    # if proby is not None:
+    #     proby = proby.reshape(bs * 1, -1).clamp(min=1e-10)  # (bs * 1, dy_out)
 
-        # Sample y
-        y_t = proby.multinomial(1)  # (bs * 1, 1)
-    else:
-        y_t = torch.zeros(bs, 4, device=X_t.device)
+    #     # Sample y
+    #     y_t = proby.multinomial(1)  # (bs * 1, 1)
+    # else:
+    y_t = torch.zeros(bs, 0).type_as(X_t)
 
     return PlaceHolder(X=X_t, E=E_t, pos=None, y=y_t)
 
@@ -376,7 +378,7 @@ def mask_distributions(true_X, true_E, pred_X, pred_E, node_mask):
     return true_X, true_E, pred_X, pred_E
 
 
-def posterior_distributions(X, E, y, X_t, E_t, y_t, Qt, Qsb, Qtb):
+def posterior_distributions(X, E, X_t, E_t, Qt, Qsb, Qtb):
     prob_X = compute_posterior_distribution(M=X, M_t=X_t, Qt_M=Qt.X, Qsb_M=Qsb.X, Qtb_M=Qtb.X)   # (bs, n, dx)
     prob_E = compute_posterior_distribution(M=E, M_t=E_t, Qt_M=Qt.E, Qsb_M=Qsb.E, Qtb_M=Qtb.E)   # (bs, n * n, de)
     # y = y.unsqueeze(1)
@@ -384,7 +386,7 @@ def posterior_distributions(X, E, y, X_t, E_t, y_t, Qt, Qsb, Qtb):
     # prob_y = compute_posterior_distribution(M=y, M_t=y_t, Qt_M=Qt.y, Qsb_M=Qsb.y, Qtb_M=Qtb.y)
     # prob_y = torch.clamp(prob_y, min=0)
 
-    return PlaceHolder(X=prob_X, E=prob_E, pos =None, y=y_t)
+    return PlaceHolder(X=prob_X, E=prob_E, pos =None, y=None)
 
 
 def sample_discrete_feature_noise(limit_dist, node_mask):
@@ -395,7 +397,7 @@ def sample_discrete_feature_noise(limit_dist, node_mask):
     y_limit = limit_dist.y[None, :].expand(bs, -1)
     U_X = x_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max)
     U_E = e_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max, n_max)
-    U_y = y_limit.multinomial(1).reshape(bs, 1)
+    U_y = torch.empty((bs, 0))
     # U_y = torch.empty((bs, 4))
 
     long_mask = node_mask.long()
@@ -405,7 +407,7 @@ def sample_discrete_feature_noise(limit_dist, node_mask):
 
     U_X = F.one_hot(U_X, num_classes=x_limit.shape[-1]).float()
     U_E = F.one_hot(U_E, num_classes=e_limit.shape[-1]).float()
-    U_y = F.one_hot(U_y, num_classes=y_limit.shape[-1]).float().squeeze(1)
+    # U_y = F.one_hot(U_y, num_classes=y_limit.shape[-1]).float().squeeze(1)
 
     # Get upper triangular part of edge noise, without main diagonal
     upper_triangular_mask = torch.zeros_like(U_E)

@@ -100,7 +100,7 @@ class AbstractDatasetInfos:
         self.input_dims = None
         self.output_dims = None
         self.num_classes = len(node_types)
-        self.max_n_nodes = len(n_nodes) - 1
+        self.max_n_nodes = len(n_nodes) -1
         self.nodes_dist = DistributionNodes(n_nodes)
         # self.prop_dist = DistributionProperty(train_ds, prop2idx_sub, normalizer=prop_norms)
 
@@ -129,4 +129,4 @@ class AbstractDatasetInfos:
         self.output_dims = {'X': example_batch['x'].size(1),
                             'pos': example_batch['pos'].size(1),
                             'E': example_batch['edge_attr'].size(1),
-                            'y': example_batch['y'].size(1)}
+                            'y': 0}

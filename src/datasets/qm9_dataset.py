@@ -45,24 +45,14 @@ class EdgeComCondTransform(object):
         2-th ch: aromatic bond or not
     """
 
-    def __init__(self, atom_type_list, atom_index, include_aromatic, property_idx):
+    def __init__(self, property_idx):
         super().__init__()
-        self.atom_type_list = torch.tensor(list(atom_type_list))
-        self.include_aromatic = include_aromatic
         self.property_idx = property_idx
-        self.atom_index = {v : k for k, v in atom_index.items()}
 
     def __call__(self, data: Data):
         '''
                 one-hot feature
         '''
-        atom_type = data.atom_type.tolist()
-        # print(data.atom_type)
-        atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
-        # print(atom_type)
-        data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-        data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
-        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
 
         properties = data.y
         if self.property_idx == 11:
@@ -89,11 +79,8 @@ class EdgeComCondMultiTransform(object):
         2-th ch: aromatic bond or not
     """
 
-    def __init__(self, atom_type_list, atom_index, include_aromatic, property_idx1, property_idx2, property_idx3, property_idx4):
+    def __init__(self, property_idx1, property_idx2, property_idx3, property_idx4):
         super().__init__()
-        self.atom_type_list = torch.tensor(list(atom_type_list))
-        self.include_aromatic = include_aromatic
-        self.atom_index = {v : k for k, v in atom_index.items()}
         self.property_idx1 = property_idx1
         self.property_idx2 = property_idx2
         self.property_idx3 = property_idx3
@@ -103,15 +90,6 @@ class EdgeComCondMultiTransform(object):
         '''
             one-hot feature
         '''
-        atom_type = data.atom_type.tolist()
-        # print(data.atom_type)
-        # atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
-        atom_type = torch.tensor(atom_type)
-        # print(atom_type)
-        data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-        data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
-        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
-
         properties = data.y
         prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
         property_data = []
@@ -449,20 +427,12 @@ class QM9DataModule(MolecularDataModule):
         regressor = getattr(cfg.general, 'regressor')
         prop2idx = {'mu': 0, 'alpha': 1, 'homo': 2, 'lumo': 3, 'gap': 4, 'Cv': 11, 'pharma_score': 16, 'SA': 17,
                     'QED': 18}
-        if self.remove_h:
-            atom_encoder = {'C': 0, 'N': 1, 'O': 2, 'F': 3, 'S': 4, 'P': 5, 'Cl': 6, 'Br': 7, 'I': 8}
-            atom_index = {6: 0, 7: 1, 8: 2, 9: 3}
-        else:
-            atom_encoder = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'S': 5, 'P': 6, 'Cl': 7, 'Br': 8, 'I': 9}
-            atom_index = {1: 0, 6: 1, 7: 2, 8: 3, 9: 4}
         if regressor and target == 'EdgeComCond':
 
-            transform = EdgeComCondTransform(atom_encoder.values(), atom_index, include_aromatic=True,
-                                             property_idx=prop2idx[cfg.model.context])
+            transform = EdgeComCondTransform(property_idx=prop2idx[cfg.model.context])
         elif regressor and target == 'EdgeComCondMulti':
 
-            transform = EdgeComCondMultiTransform(atom_encoder.values(), atom_index, include_aromatic=True,
-                                                  property_idx1=prop2idx[cfg.model.context[0]], property_idx2=prop2idx[cfg.model.context[1]],
+            transform = EdgeComCondMultiTransform(property_idx1=prop2idx[cfg.model.context[0]], property_idx2=prop2idx[cfg.model.context[1]],
                                                   property_idx3=prop2idx[cfg.model.context[2]], property_idx4=prop2idx[cfg.model.context[3]])
         elif regressor and target == 'mu':
             transform = SelectMuTransform()
@@ -478,9 +448,9 @@ class QM9DataModule(MolecularDataModule):
         datasets = {'train': QM9Dataset(stage='train', root=root_path, remove_h=cfg.dataset.remove_h,
                                         point_phore=cfg.dataset.phore, transform=transform),
                     'val': QM9Dataset(stage='val', root=root_path, remove_h=cfg.dataset.remove_h,
-                                      point_phore=cfg.dataset.phore, transform=transform),
+                                      point_phore=cfg.dataset.phore),
                     'test': QM9Dataset(stage='test', root=root_path, remove_h=cfg.dataset.remove_h,
-                                       point_phore=cfg.dataset.phore, transform=transform)}
+                                       point_phore=cfg.dataset.phore)}
         super().__init__(cfg, datasets)
 
 
@@ -488,7 +458,7 @@ class QM9infos(AbstractDatasetInfos):
     def __init__(self, datamodule, cfg, recompute_statistics=False):
         self.remove_h = cfg.dataset.remove_h
         self.need_to_strip = False        # to indicate whether we need to ignore one output from the model
-
+        self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
         self.name = 'qm9'
         if self.remove_h:
             self.atom_index = {6: 0, 7: 1, 8: 2, 9: 3}
@@ -507,8 +477,7 @@ class QM9infos(AbstractDatasetInfos):
             super().complete_infos(n_nodes=self.n_nodes, node_types=self.node_types)
             self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
             self.valency_distribution[0: 6] = torch.tensor([2.6071e-06, 0.163, 0.352, 0.320, 0.16313, 0.00073])
-            self.prop2idx = {'mu': 0, 'alpha': 1, 'homo': 2, 'lumo': 3, 'gap': 4, 'Cv': 11, 'pharma_score': 16, 'SA': 17,
-                             'QED': 18}
+            
         else:
             self.atom_index = {1: 0, 6: 1, 7: 2, 8: 3, 9: 4}
             self.atom_encoder = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4}
@@ -530,8 +499,6 @@ class QM9infos(AbstractDatasetInfos):
             super().complete_infos(n_nodes=self.n_nodes, node_types=self.node_types)
             self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
             self.valency_distribution[0:6] = torch.tensor([0, 0.5136, 0.0840, 0.0554, 0.3456, 0.0012])
-            self.prop2idx = {'mu': 0, 'alpha': 1, 'homo': 2, 'lumo': 3, 'gap': 4, 'Cv': 11, 'pharma_score': 16,
-                             'SA': 17, 'QED': 18}
 
         if recompute_statistics:
             np.set_printoptions(suppress=True, precision=5)

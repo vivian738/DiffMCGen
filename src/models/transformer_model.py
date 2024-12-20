@@ -107,10 +107,9 @@ class DCMHAttention(nn.Module):
         self.qkw_m = nn.parameter.Parameter(torch.zeros(self.num_groups, 4, self.dynamic_w_hidden_dim, self.dynamic_hidden_dim*2, self.num_heads_per_group).reshape(4,self.dynamic_w_hidden_dim,-1))
 
         # Attention
-        self.q = Linear(dx, dx)
-        self.k = Linear(dx, dx)
-        self.v = Linear(dx, dx)
+        self.wqkv = Linear(dx, 3 * dx, bias=False)
         
+
         self.edge_proj = nn.Linear(de, dx)
         self.node_gate = nn.Linear(dy, dx)
         self.edge_gate = nn.Linear(dy, dx)
@@ -139,16 +138,14 @@ class DCMHAttention(nn.Module):
         e_mask2 = x_mask.unsqueeze(1)           # bs, 1, n, 1
 
         # 1. Map X to keys and queries
-        Q = self.q(X) * x_mask           # (bs, n, dx)
-        K = self.k(X) * x_mask           # (bs, n, dx)
-        V = self.v(X) * x_mask                        # bs, n, dx       
-        diffusion_utils.assert_correctly_masked(Q, x_mask)
+        Q, K, V = self.wqkv(X).split([self.dx, self.dx, self.dx], dim=-1)    # bs, n, dx    
+
         # 2. Reshape to (bs, n, n_head, df) with dx = n_head * df
-
-        Q = Q.contiguous().view(Q.size(0), 1, Q.size(1), self.n_head, self.df)         # (bs, 1, n, n_head, df)
-        K = K.contiguous().view(K.size(0), K.size(1), 1, self.n_head, self.df)         # (bs, n, 1, n head, df)   
-        V = V.contiguous().view(V.size(0), 1, V.size(1), self.n_head, self.df)         # (bs, 1, n, n_head, df)
-
+        Q = (Q * x_mask).contiguous().view(Q.size(0), 1, Q.size(1), self.n_head, self.df)         # (bs, 1, n, n_head, df)      
+        K = (K * x_mask).contiguous().view(K.size(0), K.size(1), 1, self.n_head, self.df)         # (bs, n, 1, n head, df)            # (bs, n, dx)
+        V = (V * x_mask).contiguous().view(V.size(0), 1, V.size(1), self.n_head, self.df)         # (bs, 1, n, n_head, df)                          
+        # diffusion_utils.assert_correctly_masked(Q, x_mask)
+        
         # DCMHA to get Y (Compose(A, Q, K, theta-pre) before softmax)
         dw_hidden, dd = (X @ self.dw_m).split([2*2*self.n_head*(2*self.dynamic_hidden_dim), 2*2*self.n_head*1], -1)  # (bs, n, df)
         dw_hidden = F.gelu(dw_hidden) 
@@ -169,15 +166,14 @@ class DCMHAttention(nn.Module):
 
         logits = _cross_head_proj(Y, pre_qw1, pre_qw2, pre_kw1, pre_kw2, pre_qdd, pre_kdd)    # (bs, n, n, n_head, df)
         del pre_qw1, pre_qw2, pre_kw1, pre_kw2, pre_qdd, pre_kdd
+        torch.cuda.empty_cache()
 
         # Incorporate edge features to the self attention scores.
-        E_proj = self.edge_proj(E)    #(bs, n, n, dx)
-        
-        logits = logits + E_proj    # (bs, n, n, n_head, df)
+        E_proj = self.edge_proj(E).expand(-1, n, n, -1, )    #(bs, n, n, dx)
 
         # Incorporate y to E
-        newE = logits.flatten(start_dim=3)                      # bs, n, n, dx
-        newE = torch.sigmoid(self.edge_gate(y)).unsqueeze(1).unsqueeze(1) * newE
+        newE = logits.flatten(start_dim=3) + E_proj                      # bs, n, n, dx
+        newE = torch.sigmoid(self.edge_gate(y)).unsqueeze(1).unsqueeze(1) * newE      # bs, n, n, dx
 
         # Output E
         newE = self.e_out(newE) * e_mask1 * e_mask2      # bs, n, n, de
@@ -189,6 +185,7 @@ class DCMHAttention(nn.Module):
         probs = masked_softmax(logits, softmax_mask, dim=2)  # bs, n, n, n_head, df
         probs = _cross_head_proj(probs, post_qw1, post_qw2, post_kw1, post_kw2, post_qdd, post_kdd)
         del post_qw1, post_qw2, post_kw1, post_kw2, post_qdd, post_kdd
+        torch.cuda.empty_cache()
 
         # Compute weighted values
         # weighted_V = probs @ V  
@@ -199,7 +196,8 @@ class DCMHAttention(nn.Module):
         weighted_V = weighted_V.flatten(start_dim=2)            # bs, n, dx
 
         # Incorporate y to X
-        newX = torch.sigmoid(self.node_gate(y)).unsqueeze(1) * weighted_V
+        dynamic_bias = torch.mean(weighted_V, dim=-1, keepdim=True)
+        newX = (torch.sigmoid(self.node_gate(y)).unsqueeze(1) + dynamic_bias) * weighted_V
         
         # Output X
         newX = self.x_out(newX) * x_mask

@@ -72,24 +72,14 @@ class EdgeComCondTransform(object):
         2-th ch: aromatic bond or not
     """
 
-    def __init__(self, atom_type_list, atom_index, include_aromatic, property_idx):
+    def __init__(self, property_idx):
         super().__init__()
-        self.atom_type_list = torch.tensor(list(atom_type_list))
-        self.include_aromatic = include_aromatic
         self.property_idx = property_idx
-        self.atom_index = {v : k for k, v in atom_index.items()}
 
     def __call__(self, data: Data):
         '''
                 one-hot feature
         '''
-        atom_type = data.atom_type.tolist()
-        # print(data.atom_type)
-        atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
-        # print(atom_type)
-        data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-        data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
-        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
         properties = data.y
         data.y = properties[0, self.property_idx:self.property_idx+1]
 
@@ -107,11 +97,8 @@ class EdgeComCondMultiTransform(object):
         2-th ch: aromatic bond or not
     """
 
-    def __init__(self, atom_type_list, atom_index, include_aromatic, property_idx1, property_idx2, property_idx3, property_idx4):
+    def __init__(self, property_idx1, property_idx2, property_idx3, property_idx4):
         super().__init__()
-        self.atom_type_list = torch.tensor(list(atom_type_list))
-        self.include_aromatic = include_aromatic
-        self.atom_index = {v : k for k, v in atom_index.items()}
         self.property_idx1 = property_idx1
         self.property_idx2 = property_idx2
         self.property_idx3 = property_idx3
@@ -121,13 +108,6 @@ class EdgeComCondMultiTransform(object):
         '''
             one-hot feature
         '''
-        atom_type = data.atom_type.tolist()
-        # print(data.atom_type)
-        # atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
-        atom_type = torch.tensor(atom_type)
-        # print(atom_type)
-        # data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-        # data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
         properties = data.y
         prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
         property_data = []
@@ -422,23 +402,12 @@ class MosesDataModule(MolecularDataModule):
         target = getattr(cfg.general, 'guidance_target')
         regressor = getattr(cfg.general, 'regressor')
         prop2idx = {'pharma_score':0,'SA':1,'QED':2,'acute_tox':3,'glp1_score':4,'cav32_score':5,'hpk1_score':6,'lrrk2_score':7}
-
-        if cfg.dataset.remove_h == False:
-            self.atom_decoder = ['H', 'C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
-            self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
-            atom_index = {1: 0, 6: 1, 7: 2, 16: 3, 8: 4, 9: 5, 17: 6, 35: 7}
-        else:
-            self.atom_decoder = ['C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
-            self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
-            atom_index = {6: 0, 7: 1, 16: 2, 8: 3, 9: 4, 17: 5, 35: 6}
         if regressor and target == 'EdgeComCond':
 
-            transform = EdgeComCondTransform(self.atom_encoder.values(), atom_index, include_aromatic=True,
-                                             property_idx=prop2idx[cfg.model.context])
+            transform = EdgeComCondTransform(property_idx=prop2idx[cfg.model.context])
         elif regressor and target == 'EdgeComCondMulti':
 
-            transform = EdgeComCondMultiTransform(self.atom_encoder.values(), atom_index, include_aromatic=True,
-                                                  property_idx1=prop2idx[cfg.model.context[0]],
+            transform = EdgeComCondMultiTransform(property_idx1=prop2idx[cfg.model.context[0]],
                                                   property_idx2=prop2idx[cfg.model.context[1]],
                                                   property_idx3=prop2idx[cfg.model.context[2]],
                                                   property_idx4=prop2idx[cfg.model.context[3]])

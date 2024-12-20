@@ -93,6 +93,8 @@ class BasicMolecularMetrics(object):
         mols = []
         for graph in generated:
             atom_types, edge_types, conformers = graph
+            # edge_types[edge_types == 3] = -1
+            # edge_types[edge_types < 0] = 0
             mol = build_molecule_with_partial_charges(atom_types, edge_types, conformers, self.dataset_info.atom_decoder)
             # smiles = mol2smiles(mol)
             try:
@@ -225,9 +227,6 @@ def build_molecule_with_partial_charges(atom_types, edge_types, positions, atom_
     for i, bond in enumerate(all_bonds):
         if bond[0].item() != bond[1].item():
             mol.AddBond(bond[0].item(), bond[1].item(), bond_dict[edge_types[bond[0], bond[1]].item()])
-            if verbose:
-                print("bond added:", bond[0].item(), bond[1].item(), edge_types[bond[0], bond[1]].item(),
-                      bond_dict[edge_types[bond[0], bond[1]].item()])
             # add formal charge to atom: e.g. [O+], [N+], [S+]
             # not support [O-], [N-], [S-], [NH+] etc.
             flag, atomid_valence = check_valency(mol)
@@ -236,18 +235,18 @@ def build_molecule_with_partial_charges(atom_types, edge_types, positions, atom_
             if flag:
                 continue
             else:
-                if len(atomid_valence)==2:
-                # assert len(atomid_valence) == 2
-                    idx = atomid_valence[0]
-                    v = atomid_valence[1]
-                    an = mol.GetAtomWithIdx(idx).GetAtomicNum()
-                    if verbose:
-                        print("atomic num of atom with a large valence", an)
-                    if an in (7, 8, 16) and (v - ATOM_VALENCY[an]) == 1:
-                        mol.GetAtomWithIdx(idx).SetFormalCharge(1)
+                # if len(atomid_valence)==2:
+                assert len(atomid_valence) == 2
+                idx = atomid_valence[0]
+                v = atomid_valence[1]
+                an = mol.GetAtomWithIdx(idx).GetAtomicNum()
+                if verbose:
+                    print("atomic num of atom with a large valence", an)
+                if an in (7, 8, 16) and (v - ATOM_VALENCY[an]) == 1:
+                    mol.GetAtomWithIdx(idx).SetFormalCharge(1)
                     # print("Formal charge added")
-                else:
-                    continue
+                # else:
+                #     continue
     try:
         mol = mol.GetMol()
         # Set coordinates

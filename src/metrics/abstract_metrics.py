@@ -101,6 +101,26 @@ class SumExceptBatchMAE(MeanAbsoluteError):
         n_obs = target.numel()
         return sum_absolute_error, n_obs
 
+class SumExceptBatchWasserstein(Metric):
+    def __init__(self):
+        super().__init__()
+        self.add_state('total_value', default=torch.tensor(0.), dist_reduce_fx="sum")
+        self.add_state('total_samples', default=torch.tensor(0.), dist_reduce_fx="sum")
+
+    def update(self, pred, true, node_mask) -> None:
+        self.total_samples += pred.size(0)
+        pos_pred = pred[node_mask.bool()].view(-1, 3)  # Use masked positions
+        pos_true = true[node_mask.bool()].view(-1, 3)
+        
+        # Pairwise distances
+        dist_pred = torch.cdist(pos_pred, pos_pred, p=2)  # Predicted pairwise distances
+        dist_true = torch.cdist(pos_true, pos_true, p=2)  # Ground truth pairwise distances
+        
+        # Wasserstein loss based on pairwise distances
+        self.total_value += torch.abs(dist_pred - dist_true).mean()
+
+    def compute(self):
+        return self.total_value / self.total_samples
 
 class SumExceptBatchKL(Metric):
     def __init__(self):

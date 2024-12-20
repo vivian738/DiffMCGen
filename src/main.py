@@ -9,7 +9,7 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ['HYDRA_FULL_ERROR']='1'   #
 os.environ['NCCL_P2P_DISABLE']='1'
 os.environ["WORLD_SIZE"] = "1"
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 import pathlib
 import warnings
 
@@ -26,7 +26,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import utils
-from metrics.abstract_metrics import TrainAbstractMetricsDiscrete, TrainAbstractMetrics
+from pytorch_lightning.utilities.model_summary import ModelSummary
 
 from diffusion_model import LiftedDenoisingDiffusion
 from diffusion_model_discrete import DiscreteDenoisingDiffusion
@@ -134,11 +134,14 @@ def main(cfg: DictConfig):
         # We do not evaluate novelty during training
         sampling_metrics = SamplingMolecularMetrics(dataset_infos, train_smiles)
         visualization_tools = MolecularVisualization(cfg.dataset.remove_h, dataset_infos=dataset_infos)
-        prop2idx_sub = {
-            cfg.model.context[0]: dataset_infos.prop2idx[cfg.model.context[0]]
-        }
-        prop_norms = datamodule.train_dataset.compute_property_mean_mad(prop2idx_sub)
-        prop_norms_val = datamodule.val_dataset.compute_property_mean_mad(prop2idx_sub)
+        if cfg.general.regressor:
+            prop2idx_sub = {
+                cfg.model.context[0]: dataset_infos.prop2idx[cfg.model.context[0]]
+            }
+            prop_norms = datamodule.train_dataset.compute_property_mean_mad(prop2idx_sub)
+            prop_norms_val = datamodule.val_dataset.compute_property_mean_mad(prop2idx_sub)
+        else:
+            prop_norms, prop_norms_val =None,None
 
         model_kwargs = {'dataset_infos': dataset_infos, 'train_metrics': train_metrics,
                         'sampling_metrics': sampling_metrics, 'visualization_tools': visualization_tools,
@@ -167,6 +170,7 @@ def main(cfg: DictConfig):
     params_to_ignore = ['module.model.train_smiles', 'module.model.dataset_infos']
 
     torch.nn.parallel.DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(model, params_to_ignore)
+    # print(ModelSummary(model, max_depth=-1))
     if cfg.train.save_model:
         checkpoint_callback = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}",
                                               filename='{epoch}',
@@ -192,7 +196,7 @@ def main(cfg: DictConfig):
     use_gpu = cfg.general.gpus > 0 and torch.cuda.is_available()
     trainer = Trainer(gradient_clip_val=cfg.train.clip_grad,
                     #   profiler="simple",
-                      strategy="ddp",  # Needed to load old checkpoints: ddp_find_unused_parameters_true
+                      strategy="ddp_find_unused_parameters_true", # Needed to load old checkpoints: ddp_find_unused_parameters_true
                       accelerator='gpu' if use_gpu else 'cpu',
                       devices=cfg.general.gpus if use_gpu else 1,
                       max_epochs=cfg.train.n_epochs,
@@ -200,10 +204,11 @@ def main(cfg: DictConfig):
                     #   fast_dev_run=5,  # debug: True-every process circulate 5 times, int-circulate {int} times
                       enable_progress_bar=cfg.train.progress_bar,
                       callbacks=callbacks,
+                    #   precision=16,
                       log_every_n_steps=50 if name != 'debug' else 1,
                     #   val_check_interval=cfg.general.val_check_interval,
-                      logger=[],
-                      accumulate_grad_batches=4)
+                      logger=[])
+                      #accumulate_grad_batches=4)
 
     if not cfg.general.test_only:
         trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.general.resume)

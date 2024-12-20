@@ -41,12 +41,14 @@ class PositionsMLP(nn.Module):
     def __init__(self, hidden_dim, eps=1e-5):
         super().__init__()
         self.eps = eps
-        self.mlp = nn.Sequential(nn.Linear(1, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1))
+        self.mlp = nn.Sequential(nn.Linear(1, hidden_dim), nn.LeakyReLU(), nn.Linear(hidden_dim, 1))
 
     def forward(self, pos, node_mask):
         norm = torch.norm(pos, dim=-1, keepdim=True)           # bs, n, 1
+        norm = (norm - torch.min(norm)) / (torch.max(norm) - torch.min(norm) + self.eps)
         new_norm = self.mlp(norm)                              # bs, n, 1
-        new_pos = pos * new_norm / (norm + self.eps)
+        eps_dynamic = max(self.eps, float(1e-5 * torch.mean(norm)))
+        new_pos = pos * new_norm / (norm + eps_dynamic)
         new_pos = new_pos * node_mask.unsqueeze(-1)
         new_pos = new_pos - torch.mean(new_pos, dim=1, keepdim=True)
         return new_pos

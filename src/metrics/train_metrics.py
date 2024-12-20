@@ -71,7 +71,7 @@ class TrainLossDiscrete(nn.Module):
         # self.cross_active_edge = CrossEntropyMetric()
         self.lambda_train = lambda_train
 
-    def forward(self, masked_pred_X, masked_pred_E, pred_y, true_X, true_E, true_y, log: bool): #active_edge_t0, 
+    def forward(self, masked_pred_X, masked_pred_E, node_mask, pred_y, true_X, true_E, true_y, log: bool): #active_edge_t0, 
         """ Compute train metrics
         masked_pred_X : tensor -- (bs, n, dx)
         masked_pred_E : tensor -- (bs, n, n, de)
@@ -80,20 +80,24 @@ class TrainLossDiscrete(nn.Module):
         true_E : tensor -- (bs, n, n, de)
         true_y : tensor -- (bs, )
         log : boolean. """
-        true_X = torch.reshape(true_X, (-1, true_X.size(-1)))  # (bs * n, dx)
-        true_E = torch.reshape(true_E, (-1, true_E.size(-1)))  # (bs * n * n, de)
-        masked_pred_X = torch.reshape(masked_pred_X, (-1, masked_pred_X.size(-1)))  # (bs * n, dx)
-        masked_pred_E = torch.reshape(masked_pred_E, (-1, masked_pred_E.size(-1)))   # (bs * n * n, de)
+
+        bs, n = node_mask.shape
+        # true_X = torch.reshape(true_X, (-1, true_X.size(-1)))  # (bs * n, dx)
+        # true_E = torch.reshape(true_E, (-1, true_E.size(-1)))  # (bs * n * n, de)
+        # masked_pred_X = torch.reshape(masked_pred_X, (-1, masked_pred_X.size(-1)))  # (bs * n, dx)
+        # masked_pred_E = torch.reshape(masked_pred_E, (-1, masked_pred_E.size(-1)))   # (bs * n * n, de)
 
         # Remove masked rows
-        mask_X = (true_X != 0.).any(dim=-1)
-        mask_E = (true_E != 0.).any(dim=-1)
+        # mask_X = (true_X != 0.).any(dim=-1)
+        diag_mask = ~torch.eye(masked_pred_X.size(1), device=node_mask.device, dtype=torch.bool).unsqueeze(0).repeat(bs, 1, 1)
+        edge_mask = diag_mask & node_mask.unsqueeze(-1) & node_mask.unsqueeze(-2)
+        # mask_E = (true_E != 0.).any(dim=-1)
 
-        flat_true_X = true_X[mask_X, :]
-        flat_pred_X = masked_pred_X[mask_X, :]
+        flat_true_X = true_X[node_mask]
+        flat_pred_X = masked_pred_X[node_mask]
 
-        flat_true_E = true_E[mask_E, :]
-        flat_pred_E = masked_pred_E[mask_E, :]
+        flat_true_E = true_E[edge_mask]
+        flat_pred_E = masked_pred_E[edge_mask]
 
         loss_X = self.node_loss(flat_pred_X, flat_true_X) if true_X.numel() > 0 else 0.0
         loss_E = self.edge_loss(flat_pred_E, flat_true_E) if true_E.numel() > 0 else 0.0
@@ -191,19 +195,26 @@ class DualLossDiscrete(nn.Module):
         return to_log
 
 class LEFTLossDiscrete(nn.Module):
-    def __init__(self):
+    def __init__(self, atom_type_to_atomic_number):
         super().__init__()
         self.loss_pos = MeanSquaredError(sync_on_compute=False, dist_sync_on_step=False)
-        self.loss_cond = MeanAbsoluteError()
+        self.loss_cond = CrossEntropyMetric()
+        self.atom_type_to_atomic_number = atom_type_to_atomic_number
     
-    def forward(self, net_out, pos, context, node_mask, log:bool):
+    def forward(self, net_out, pos, true_X, node_mask, log:bool):
         node_gt, pos_gt = net_out
         vel = pos_gt - pos
         if torch.any(torch.isnan(vel)):
             print("Warning: detected nan in pos, resetting EGNN output to randn.")
             pos_gt = vel + torch.randn_like(vel) * 1e-6 + pos
         loss_pos = self.loss_pos(pos_gt[node_mask], pos[node_mask])
-        loss_cond = self.loss_cond(node_gt[node_mask], context)
+        masked_pred_X = torch.reshape(node_gt, (-1, node_gt.size(-1)))
+        true_X = torch.reshape(true_X, (-1, true_X.size(-1)))  # (bs * n, dx)
+        mask_X = (true_X != 0.).any(dim=-1)
+
+        flat_true_X = true_X[mask_X, :]
+        flat_pred_X = masked_pred_X[mask_X, :]
+        loss_cond = self.loss_cond(flat_pred_X, flat_true_X) if true_X.numel() > 0 else 0.0
         loss = 5 * loss_pos + loss_cond
         if log:
             to_log = {
@@ -218,7 +229,7 @@ class LEFTLossDiscrete(nn.Module):
 
     def log_epoch_metrics(self):
         pos_loss = self.loss_pos.compute() if self.loss_pos.total > 0 else -1
-        cond_loss = self.loss_cond.compute() if self.loss_cond.total > 0 else -1
+        cond_loss = self.loss_cond.compute() if self.loss_cond.total_samples > 0 else -1
         
         to_log = {
             "train_epoch/pos_loss": pos_loss,

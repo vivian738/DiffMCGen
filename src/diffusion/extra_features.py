@@ -274,6 +274,8 @@ class KNodeCycles:
         term9_t = batch_diagonal(self.k2_matrix).pow(2).sum(-1)
         term10_t = batch_trace(self.k2_matrix)
 
+        # c6_local = (term_1_t - 3 * term_2_t + 9 * term3_t - 6 * term_4_t + 6 * term_5_t- 4 *term_6_t).unsqueeze(-1).float()
+        # c6_global = (4 * term_7_t + 3 * term8_t - 12 * term9_t + 4 * term10_t).unsqueeze(-1).float()
         c6_t = (term_1_t - 3 * term_2_t + 9 * term3_t - 6 * term_4_t + 6 * term_5_t - 4 * term_6_t + 4 * term_7_t +
                 3 * term8_t - 12 * term9_t + 4 * term10_t)
         return None, (c6_t / 12).unsqueeze(-1).float()

@@ -9,9 +9,9 @@ from torch.nn import Embedding
 from torch_geometric.nn import radius_graph
 from torch_geometric.nn.conv import MessagePassing
 from torch_scatter import scatter, scatter_mean
-from diffusion.diffusion_utils import get_timestep_embedding, get_beta_schedule
 from models.layers import PositionsMLP
 from torch_geometric.utils import to_dense_batch
+from diffusion.diffusion_utils import get_timestep_embedding
 
 def nan_to_num(vec, num=0.0):
     idx = torch.isnan(vec)
@@ -24,6 +24,29 @@ def _normalize(vec, dim=-1):
 
 def swish(x):
     return x * torch.sigmoid(x)
+
+class MappingBlock(nn.Module):
+    def __init__(self, atom_type_to_atomic_number):
+        super().__init__()
+        self.atom_type_to_atomic_number = atom_type_to_atomic_number
+
+        mapping_tensor = torch.full(
+            (len(atom_type_to_atomic_number),),
+            -1.0,
+            dtype=torch.float32
+        )
+        for key, value in atom_type_to_atomic_number.items():
+            mapping_tensor[key] = float(value)
+
+        self.mapping_tensor = nn.Parameter(mapping_tensor)
+
+    def forward(self, node_gt):
+        atomic_gt = torch.gather(
+            self.mapping_tensor.unsqueeze(0),
+            1,
+            node_gt.long().unsqueeze(0)
+        ).squeeze(0)
+        return atomic_gt
 
 ## radial basis function to embed distances
 class rbf_emb(nn.Module):
@@ -81,6 +104,7 @@ class S_vector(MessagePassing):
         self.hid_dim = hid_dim
         self.lin1 = nn.Sequential(
             nn.Linear(hid_dim, hid_dim),
+            nn.LayerNorm(hid_dim, elementwise_affine=False),
             nn.SiLU())
 
     def forward(self, s, v, edge_index, emb):
@@ -332,28 +356,20 @@ class LEFTNet(torch.nn.Module):
 
     """
 
-    def __init__(self, cfg, property_norms):
+    def __init__(self, cfg):
         super(LEFTNet, self).__init__()
         self.num_layers = cfg.model.num_layers
+        self.T = cfg.model.diffusion_steps
         self.hidden_channels = cfg.model.hidden_channels
         self.cutoff = cfg.model.cutoff
         self.pos_require_grad = cfg.model.pos_require_grad
         self.num_radial = cfg.model.num_radial
-        self.atomic_input_dim = cfg.model.num_atomic * 2 + 1
+        self.atomic_input_dim = cfg.model.num_atomic + 1
         self.atom_type_to_atomic_number = cfg.dataset.atom_type_to_atomic_number
-
-        self.temb = torch.nn.Module()
-        self.temb.dense = torch.nn.ModuleList([
-            torch.nn.Linear(self.hidden_channels-1,
-                            self.hidden_channels * 4),
-            torch.nn.Linear(self.hidden_channels * 4,
-                            self.hidden_channels * 4),
-        ])
-        self.temb_proj = torch.nn.Linear(self.hidden_channels * 4,
-                                            self.hidden_channels-1)
+        # self.mapping_block = MappingBlock(self.atom_type_to_atomic_number)
         
         self.z_emb = Embedding(self.atomic_input_dim, self.hidden_channels)
-        self.embedding_out = nn.Linear(self.hidden_channels, 1)
+        self.embedding_out = nn.Linear(self.hidden_channels, len(self.atom_type_to_atomic_number))
         self.radial_emb = rbf_emb(self.num_radial, self.cutoff)
         self.radial_lin = nn.Sequential(
             nn.Linear(self.num_radial, self.hidden_channels),
@@ -388,8 +404,8 @@ class LEFTNet(torch.nn.Module):
         self.mean_neighbor_pos = aggregate_pos(aggr='mean')
 
         self.inv_sqrt_2 = 1 / math.sqrt(2.0)
-        self.y_mean = property_norms[cfg.model.context[0]]['mean']
-        self.y_std = property_norms[cfg.model.context[0]]['mad']
+        # self.y_mean = property_norms[cfg.model.context[0]]['mean']
+        # self.y_std = property_norms[cfg.model.context[0]]['mad']
 
         self.reset_parameters()
 
@@ -407,48 +423,23 @@ class LEFTNet(torch.nn.Module):
             if hasattr(layer, 'reset_parameters'):
                 layer.reset_parameters()
     
-    def egn_process(self, pos, node_mask):
 
-        pos_in=self.mlp_in_pos(pos, node_mask)
-        pos_perturbed = pos_in[node_mask]
-        # node2graph = batch
-        # num_graphs = node2graph[-1] + 1
+    def forward(self, z, node_mask, noise_pos, batch, context, time_step):
+        pos_perturbed = self.mlp_in_pos(noise_pos, node_mask)[node_mask]
 
-        # # # Sample time step
-        # time_step = torch.randint(
-        #     0, self.num_timesteps, size=(num_graphs // 2 + 1,), device=pos.device)
-        
-        # time_step = torch.cat(
-        #     [time_step, self.num_timesteps - time_step - 1], dim=0)[:num_graphs]
-        # a = self.alphas.index_select(0, time_step.long())  # (G, )
-
-        # a_pos = a.index_select(0, node2graph).unsqueeze(-1)  # (N, 1)
-
-        # """
-        # Independently
-        # - Perturb pos
-        # """
-        # pos_noise = torch.zeros(size=pos.size(), device=pos.device)
-        # pos_noise.normal_()
-        # pos_perturbed = pos + center_pos(pos_noise, batch) * (1.0 - a_pos).sqrt() / a_pos.sqrt()
-
-        return pos_perturbed
-
-    def forward(self, z, node_mask, pos_perturbed, batch, context, time_step):
         z = z[node_mask].long()
-        # atomic_nc = fc_gamma * z + fc_beta
-        nonlinearity = torch.nn.ReLU()
-        temb = get_timestep_embedding(time_step.squeeze(1), self.hidden_channels - 1)
-        temb = self.temb.dense[0](temb)
-        temb = nonlinearity(temb)
-        temb = self.temb.dense[1](temb)
-        temb = self.temb_proj(nonlinearity(temb))  # (G, dim)
-        temb = temb.index_select(0, batch)  # (batch, hidden)
+        # time_step = time_step / self.T
+        time_emb = time_step.index_select(0, batch).squeeze(1)
+        time_emb = get_timestep_embedding(time_emb, self.hidden_channels)
         # embed z
-        ctx = (context - context.min()) / (context.max() - context.min())
-        temb = torch.cat([temb, ctx], dim=1)
-        z_emb = self.z_emb(z) +  temb # (N, bs)
-        
+        if context is None:
+            temb=time_emb
+        else:
+            ctx = (context - context.min()) / (context.max() - context.min())
+            temb = time_emb + ctx
+        z_ = self.z_emb(z) # (N, bs)
+        z_emb = z_ + temb # (N, bs)
+
         # construct edges based on the cutoff value
         edge_index = radius_graph(pos_perturbed, r=self.cutoff, batch=batch)
         i, j = edge_index
@@ -536,47 +527,20 @@ class LEFTNet(torch.nn.Module):
         if self.pos_require_grad:
             _, pos_gt = self.out_forces(s, vec)
 
-        h = self.embedding_out(s).squeeze(1)
-        # h = scatter(h, batch, dim=0)  #(bs,)
-        
-        h, _ = to_dense_batch(x=h, batch=batch)
-        h = h * node_mask
+        h = self.embedding_out(s)
+        node_gt = torch.nn.functional.gumbel_softmax(h, tau=1, hard=True, dim=-1)
+        # node_gt = torch.sum(node_gt * torch.arange(node_gt.size(-1), device=h.device), dim=-1)
+        # atomic_gt = self.mapping_block(node_gt)
+        atomic_gt, _ = to_dense_batch(x=node_gt, batch=batch)
+        h = atomic_gt * node_mask.unsqueeze(-1)  #(bs, n, dx)
         # h = h * self.y_std + self.y_mean
+        # dpos_gt= pos_perturbed + pos_gt
         pos_gt, _ = to_dense_batch(x=pos_gt, batch=batch)
-        pos = self.mlp_out_pos(pos_gt, node_mask)
-        pos = pos * node_mask.unsqueeze(-1)
-    
-        if self.pos_require_grad:
-            return h, pos
-        return s, vec
-    
-    # def sampled_dynamics_pos(self, net_out, pos, batch, i, j, t):
-    #     def compute_alpha(beta, t):
-    #         beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
-    #         a = (1 - beta).cumprod(dim=0).index_select(0, t + 1)  # .view(-1, 1, 1, 1)
-    #         return a
+        pos_gt = self.mlp_out_pos(pos_gt, node_mask)
         
-    #     node_gt, pos_gt = net_out
-    #     vel = pos_gt - pos
-    #     noise = torch.randn_like(pos)
-    #     b = self.betas
-    #     t = t[0]
-    #     next_t = (torch.ones(1) * j).to(pos.device)
-    #     at = compute_alpha(b, t.long())
-    #     at_next = compute_alpha(b, next_t.long())
-    #     beta_t = 1 - at / at_next
-    #     e = -vel
-
-    #     pos0_from_e = (1.0 / at).sqrt() * pos - (1.0 / at - 1).sqrt() * e
-    #     mean = (
-    #         (at_next.sqrt() * beta_t) * pos0_from_e + ((1 - beta_t).sqrt() * (1 - at_next)) * pos
-    #             ) / (1.0 - at)
-    #     mask = 1 - (t == 0).float()
-    #     logvar = beta_t.log()
-    #     pos_next = mean + mask * torch.exp(
-    #         0.5 * logvar) * noise   
-        
-    #     return pos_next
+        pos = pos_gt * node_mask.unsqueeze(-1)  #(bs, n, 3)
+    
+        return h, pos
 
     @property
     def num_params(self):

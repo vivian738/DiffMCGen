@@ -28,7 +28,7 @@ class DistributionNodes:
         p = self.prob.to(batch_n_nodes.device)
 
         probas = p[batch_n_nodes]
-        log_p = torch.log(probas + 1e-30)
+        log_p = torch.log(probas + 1e-10)
         return log_p
 
 import torch
@@ -40,7 +40,7 @@ class DistributionProperty:
     def __init__(self, dataloader, properties, num_bins=1000, normalizer=None):
         self.num_bins = num_bins
         self.distributions = {}
-        self.properties = list(properties.keys())[0]   # qm9: gap [1]
+        self.properties = properties.keys()   # qm9: gap [1]
 
         # iterate dataset, get data nodes and corresponding properties
         num_atoms = []

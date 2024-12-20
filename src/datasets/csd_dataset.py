@@ -40,24 +40,14 @@ class EdgeComCondTransform(object):
         2-th ch: aromatic bond or not
     """
 
-    def __init__(self, atom_type_list, atom_index, include_aromatic, property_idx):
+    def __init__(self, property_idx):
         super().__init__()
-        self.atom_type_list = torch.tensor(list(atom_type_list))
-        self.include_aromatic = include_aromatic
         self.property_idx = property_idx
-        self.atom_index = {v : k for k, v in atom_index.items()}
 
     def __call__(self, data: Data):
         '''
                 one-hot feature
         '''
-        atom_type = data.atom_type.tolist()
-        # print(data.atom_type)
-        atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
-        # print(atom_type)
-        data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-        data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
-        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
         properties = data.y
         data.y = properties[0, self.property_idx:self.property_idx+1]
 
@@ -75,11 +65,8 @@ class EdgeComCondMultiTransform(object):
         2-th ch: aromatic bond or not
     """
 
-    def __init__(self, atom_type_list, atom_index, include_aromatic, property_idx1, property_idx2, property_idx3, property_idx4):
+    def __init__(self, property_idx1, property_idx2, property_idx3, property_idx4):
         super().__init__()
-        self.atom_type_list = torch.tensor(list(atom_type_list))
-        self.include_aromatic = include_aromatic
-        self.atom_index = {v : k for k, v in atom_index.items()}
         self.property_idx1 = property_idx1
         self.property_idx2 = property_idx2
         self.property_idx3 = property_idx3
@@ -89,15 +76,6 @@ class EdgeComCondMultiTransform(object):
         '''
             one-hot feature
         '''
-        atom_type = data.atom_type.tolist()
-        # print(data.atom_type)
-        # atom_type = torch.tensor([self.atom_index[i] for i in atom_type])
-        atom_type = torch.tensor(atom_type)
-        # print(atom_type)
-        data.atom_feat = F.one_hot(atom_type, num_classes=len(self.atom_index))
-        data.atom_feat_full = torch.cat([data.atom_feat, data.atom_type.unsqueeze(1)], dim=1)
-        # data.atom_feat_full = torch.cat([data.atom_feat_full, data.charge.unsqueeze(1)], dim=1)
-        
         properties = data.y
         prop_list = [self.property_idx1, self.property_idx2, self.property_idx3, self.property_idx4]
         property_data = []
@@ -110,22 +88,18 @@ class EdgeComCondMultiTransform(object):
         return data
 
 
+
 class PropClassifierTransform(object):
     """
         Transform data with node and edge features.
         Conditional property.
 
     """
-    def __init__(self, atom_type_list, property_idx):
+    def __init__(self, property_idx):
         super().__init__()
-        self.atom_type_list = torch.tensor(list(atom_type_list))
         self.property_idx = property_idx
 
     def __call__(self, data: Data):
-        data.charge = data.charge
-        atom_type = data.atom_type
-        one_hot = atom_type.unsqueeze(-1) == self.atom_type_list.unsqueeze(0)
-        data.one_hot = one_hot.float()
         data.y = data.y[0, self.property_idx]
 
         return data
@@ -272,11 +246,11 @@ class CSDDataset(InMemoryDataset):
 
     def process(self):
         RDLogger.DisableLog('rdApp.*')
-        types = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
-                'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
+        types =  {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'P': 5, 
+                                'S': 6, 'Cl': 7, 'Br': 8, 'I': 9}
         bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
-        charge_dict = {'H': 1,'B': 5, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'Mg': 12, 'P': 15, 
-                        'S': 16, 'Cl': 17, 'Ca': 20, 'Br': 35, 'I': 53, 'Ba': 56}
+        charge_dict = {'H': 1,'C': 6, 'N': 7, 'O': 8, 'F': 9, 'P': 15, 
+                        'S': 16, 'Cl': 17, 'Br': 35, 'I': 53}
         target_df = pd.read_csv(self.split_paths[self.file_idx], index_col=0)
         with open(self.raw_paths[1], 'r') as f:
             target = f.read().split('\n')[1:-1]
@@ -289,11 +263,9 @@ class CSDDataset(InMemoryDataset):
         for i, mol in enumerate(tqdm(suppl)):
             if i not in target_df.index or mol is None:
                 continue
-            mol = Chem.AddHs(mol)
-            N = mol.GetNumAtoms()
-            if N > 40:
+            if mol.GetNumAtoms() > 48:
                 continue
-
+            N = mol.GetNumAtoms()
             check = True
             if mol.GetNumConformers() == 0:
                 AllChem.EmbedMolecule(mol)
@@ -301,7 +273,7 @@ class CSDDataset(InMemoryDataset):
             conf = mol.GetConformer()
             pos = conf.GetPositions()
             pos = torch.tensor(pos, dtype=torch.float)
-            posc = pos - pos.mean(dim=0)
+            posc = pos - torch.mean(pos, dim=0, keepdim=True)
 
             charges = []
             formal_charges = []
@@ -309,9 +281,14 @@ class CSDDataset(InMemoryDataset):
             type_idx = []
             for atom in mol.GetAtoms():
                 atom_str = atom.GetSymbol()
+                if atom_str not in list(types.keys()):
+                    check = False
+                    break
                 type_idx.append(types[atom_str])
                 charges.append(charge_dict[atom_str])
                 formal_charges.append(atom.GetFormalCharge())
+            if check == False:
+                continue
 
             row, col, edge_type = [], [], []
             for bond in mol.GetBonds():
@@ -398,24 +375,12 @@ class CSDDataModule(MolecularDataModule):
         target = getattr(cfg.general, 'guidance_target')
         regressor = getattr(cfg.general, 'regressor')
         prop2idx =  {'glp1_score' :0, 'cav32_score':1, 'hpk1_score' :2, 'lrrk2_score' :3, 'pharma_score' :4, 'SA' :5, 'QED':6, 'acute_tox':7}
-        if self.remove_h:
-            atom_encoder = {'B': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'Mg': 5, 'P': 6, 
-                            'S': 7, 'Cl': 8, 'Ca': 9, 'Br': 10, 'I': 11, 'Ba': 12}
-            atom_index = {5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
-                            35:11, 53:12, 56:13}
-        else:
-            atom_encoder = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
-                            'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
-            atom_index = {1: 0, 5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
-                            35:11, 53:12, 56:13}
         if regressor and target == 'EdgeComCond':
 
-            transform = EdgeComCondTransform(atom_encoder.values(), atom_index, include_aromatic=True,
-                                             property_idx=prop2idx[cfg.model.context])
+            transform = EdgeComCondTransform(property_idx=prop2idx[cfg.model.context])
         elif regressor and target == 'EdgeComCondMulti':
 
-            transform = EdgeComCondMultiTransform(atom_encoder.values(), atom_index, include_aromatic=True,
-                                                  property_idx1=prop2idx[cfg.model.context[0]], property_idx2=prop2idx[cfg.model.context[1]],
+            transform = EdgeComCondMultiTransform(property_idx1=prop2idx[cfg.model.context[0]], property_idx2=prop2idx[cfg.model.context[1]],
                                                   property_idx3=prop2idx[cfg.model.context[2]], property_idx4=prop2idx[cfg.model.context[3]])
         else:
             transform = RemoveYTransform()
@@ -437,59 +402,50 @@ class CSDinfos(AbstractDatasetInfos):
         self.remove_h = cfg.dataset.remove_h
         self.name = 'csd'
         if self.remove_h:
-            self.atom_index = {5: 0, 6: 1, 7: 2, 8: 3, 9:4, 12:5, 15:6, 16:7, 17:8, 20:9, 
-                            35:10, 53:11, 56:12}
-            self.atom_encoder = {'B': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'Mg': 5, 'P':6, 
-                                'S': 7, 'Cl': 8, 'Ca': 9, 'Br': 10, 'I': 11, 'Ba': 12}
-            self.atom_decoder = ['B', 'C', 'N', 'O', 'F', 'Mg', 'P', 
-                                'S', 'Cl', 'Ca', 'Br', 'I', 'Ba']
-            self.valencies = [3, 4, 3, 2, 1, 2, 3, 2, 1, 2, 1, 1, 2]
+            self.atom_index = {6: 0, 7: 1, 8: 2, 9:3, 15:4, 16:5, 17:6,
+                            35:7, 53:8}
+            self.atom_encoder = {'C': 0, 'N': 1, 'O': 2, 'F': 3, 'P':4, 
+                                'S': 5, 'Cl': 6, 'Br': 7, 'I': 8}
+            self.atom_decoder = ['C', 'N', 'O', 'F', 'P', 
+                                'S', 'Cl', 'Br', 'I']
+            self.valencies = [4, 3, 2, 1, 3, 2, 1, 1, 1]
             self.num_atom_types = len(self.atom_decoder)
-            self.max_n_nodes = 40
-            self.max_weight = 600
-            self.atom_weights = {0: 11, 1: 12, 2: 14, 3: 16, 4:19, 5:24, 6:31, 7:32, 
-                                8:35, 9:40, 10:80, 11:127, 12:137}
-            self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
-            self.n_nodes = torch.tensor([0.0000e+00, 0.0000e+00, 3.7631e-04, 9.4830e-04, 2.0170e-03, 2.8148e-03,
-                                        5.1479e-03, 5.5543e-03, 1.2779e-02, 1.4872e-02, 2.7832e-02, 2.9141e-02,
-                                        4.2342e-02, 4.0777e-02, 5.9803e-02, 6.0856e-02, 8.3495e-02, 8.3510e-02,
-                                        1.0476e-01, 9.1277e-02, 9.3987e-02, 7.1438e-02, 6.6034e-02, 3.7616e-02,
-                                        3.0812e-02, 1.3171e-02, 9.1368e-03, 3.0707e-03, 2.6342e-03, 7.6767e-04,
-                                        1.1139e-03, 2.5589e-04, 5.4188e-04, 1.9568e-04, 4.0641e-04, 1.0537e-04,
-                                        2.1073e-04, 6.0209e-05, 3.0105e-05, 6.0209e-05, 4.5157e-05])
-            self.node_types = torch.tensor([6.1698e-04, 7.3823e-01, 7.2801e-02, 1.2315e-01, 1.7945e-02, 1.6145e-05,
-                                            2.5314e-03, 2.0910e-02, 1.3963e-02, 3.4597e-06, 7.8282e-03, 2.0066e-03,
-                                            0.0000e+00])
-            self.edge_types = torch.tensor([0.8771, 0.0590, 0.0109, 0.0009, 0.0521])
-            self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
-            self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.3238e-01, 2.0985e-01, 3.8483e-01, 2.6112e-01, 7.4222e-03,
-                                                        4.3973e-03, 0.0000e+00, 2.3065e-06])
-        else:
-            self.atom_index = {1: 0, 5: 1, 6: 2, 7: 3, 8: 4, 9:5, 12:6, 15:7, 16:8, 17:9, 20:10, 
-                            35:11, 53:12, 56:13}
-            self.atom_encoder = {'H': 0,'B': 1, 'C': 2, 'N': 3, 'O': 4, 'F': 5, 'Mg': 6, 'P': 7, 
-                                'S': 8, 'Cl': 9, 'Ca': 10, 'Br': 11, 'I': 12, 'Ba': 13}
-            self.atom_decoder = ['H','B', 'C', 'N', 'O', 'F', 'Mg', 'P', 
-                                'S', 'Cl', 'Ca', 'Br', 'I', 'Ba']
-            self.valencies = [1, 3, 4, 3, 2, 1, 2, 3, 2, 1, 2, 1, 1, 2]
-            self.num_atom_types = len(self.atom_decoder)
-            self.max_n_nodes = 40
+            self.max_n_nodes = 48
             self.max_weight = 500
-            self.atom_weights = {0: 1, 1: 11, 2: 12, 3: 14, 4: 16, 5:19, 6:24, 7:31, 8:32, 
-                                9:35, 10:40, 11:80, 12:127, 13:137}
+            self.atom_weights = {0: 12, 1: 14, 2: 16, 3: 19, 4:31, 5:32, 6:35, 7:80, 
+                                8:127}
             self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
-            self.n_nodes = torch.tensor([0.0000, 0.0000, 0.0001, 0.0004, 0.0009, 0.0013, 0.0023, 0.0026, 0.0059,
-                                        0.0072, 0.0133, 0.0140, 0.0204, 0.0195, 0.0287, 0.0292, 0.0407, 0.0420,
-                                        0.0546, 0.0504, 0.0572, 0.0507, 0.0582, 0.0496, 0.0553, 0.0457, 0.0478,
-                                        0.0367, 0.0398, 0.0297, 0.0341, 0.0234, 0.0270, 0.0186, 0.0221, 0.0138,
-                                        0.0174, 0.0102, 0.0121, 0.0073, 0.0099])
-            self.node_types = torch.tensor([3.8415e-04, 8.3435e-04, 7.8233e-01, 5.6424e-02, 1.1735e-01, 1.1164e-02,
-                                            9.6143e-06, 3.0716e-03, 1.4705e-02, 7.9167e-03, 2.9261e-06, 4.7783e-03,
-                                            1.0296e-03, 0.0000e+00])
-            self.edge_types = torch.tensor([9.1021e-01, 6.5449e-02, 2.3911e-02, 4.3119e-04, 0.0000e+00])
-            self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
-            self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.2907e-01, 2.3079e-01, 3.8297e-01, 2.5078e-01, 2.0696e-03,
-                                                        4.3273e-03, 4.1801e-07, 8.3602e-07])
+            self.n_nodes = None
+            self.node_types = None
+            self.edge_types = None
+            self.valency_distribution = None
+            # self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.3238e-01, 2.0985e-01, 3.8483e-01, 2.6112e-01, 7.4222e-03,
+            #                                             4.3973e-03, 0.0000e+00, 2.3065e-06])
+        else:
+            self.atom_index = {1: 0, 6: 1, 7: 2, 8: 3, 9:4, 15:5, 16:6, 17:7,
+                            35:8, 53:9}
+            self.atom_encoder = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'P': 5, 
+                                'S': 6, 'Cl': 7, 'Br': 8, 'I': 9}
+            self.atom_decoder = ['H', 'C', 'N', 'O', 'F', 'P', 
+                                'S', 'Cl', 'Br', 'I']
+            self.valencies = [1, 4, 3, 2, 1, 3, 2, 1, 1, 1]
+            self.num_atom_types = len(self.atom_decoder)
+            self.max_n_nodes = 48
+            self.max_weight = 500
+            self.atom_weights = {0: 1, 1: 12, 2: 14, 3: 16, 4: 19, 5:31, 6:32, 7:35, 8:80, 
+                                9:127}
+            self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+            self.n_nodes = torch.tensor([0.0000, 0.0000, 0.0001, 0.0004, 0.0009, 0.0012, 0.0022, 0.0026, 0.0057,
+                                        0.0070, 0.0128, 0.0135, 0.0197, 0.0189, 0.0279, 0.0283, 0.0395, 0.0408,
+                                        0.0531, 0.0490, 0.0555, 0.0492, 0.0564, 0.0480, 0.0534, 0.0442, 0.0460,
+                                        0.0354, 0.0383, 0.0285, 0.0328, 0.0225, 0.0257, 0.0177, 0.0211, 0.0132,
+                                        0.0165, 0.0097, 0.0115, 0.0069, 0.0094, 0.0055, 0.0074, 0.0036, 0.0055,
+                                        0.0027, 0.0042, 0.0020, 0.0037])
+            self.node_types = torch.tensor([3.7325e-04, 7.8441e-01, 5.5899e-02, 1.1707e-01, 1.1227e-02, 3.1953e-03,
+                                            1.4546e-02, 7.6903e-03, 4.6092e-03, 9.7929e-04])
+            self.edge_types = torch.tensor([9.1415e-01, 4.4567e-02, 6.8226e-03, 4.0956e-04, 3.4053e-02])
+            self.valency_distribution = torch.zeros(self.max_n_nodes * 3 - 2)
+            self.valency_distribution[:7] = torch.tensor([0.0000, 0.1270, 0.2255, 0.3855, 0.2524, 0.0053, 0.0043])
 
         if recompute_statistics or self.n_nodes is None:
             np.set_printoptions(suppress=True, precision=5)

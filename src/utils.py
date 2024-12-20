@@ -11,6 +11,11 @@ import numpy as np
 import torch.nn.functional as F
 from rdkit import Chem
 
+def zero_module(module):
+    for p in module.parameters():
+        torch.nn.init.zeros_(p)
+    return module
+
 
 def create_folders(args):
     try:
@@ -125,12 +130,12 @@ class PlaceHolder:
         return self
 
     def mask(self, node_mask, collapse=False):
-        # bs, n = node_mask.shape
+        bs, n = node_mask.shape
         x_mask = node_mask.unsqueeze(-1)          # bs, n, 1
         e_mask1 = x_mask.unsqueeze(2)             # bs, n, 1, 1
         e_mask2 = x_mask.unsqueeze(1)             # bs, 1, n, 1
-        # diag_mask = ~torch.eye(n, dtype=torch.bool,
-        #                        device=node_mask.device).unsqueeze(0).expand(bs, -1, -1).unsqueeze(-1)  # bs, n, n, 1
+        diag_mask = ~torch.eye(n, dtype=torch.bool,
+                               device=node_mask.device).unsqueeze(0).expand(bs, -1, -1).unsqueeze(-1)  # bs, n, n, 1
         if collapse:
             self.X = torch.argmax(self.X, dim=-1)
             self.E = torch.argmax(self.E, dim=-1)
@@ -139,7 +144,7 @@ class PlaceHolder:
             self.E[(e_mask1 * e_mask2).squeeze(-1) == 0] = - 1
         else:
             self.X = self.X * x_mask
-            self.E = self.E * e_mask1 * e_mask2 #* diag_mask
+            self.E = self.E * e_mask1 * e_mask2 * diag_mask
             if self.pos is not None:
                 self.pos = self.pos * x_mask
                 self.pos = self.pos - self.pos.mean(dim=1, keepdim=True)
