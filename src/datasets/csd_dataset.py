@@ -388,9 +388,9 @@ class CSDDataModule(MolecularDataModule):
         base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
         root_path = os.path.join(base_path, self.datadir)
         datasets = {'train': CSDDataset(stage='train', root=root_path,remove_h = self.remove_h, prop2idx=prop2idx,
-                                        transform=transform),
+                                        transform=RemoveYTransform),
                     'val': CSDDataset(stage='val', root=root_path, remove_h = self.remove_h, prop2idx=prop2idx,
-                                      transform=transform),
+                                      transform=RemoveYTransform),
                     'test': CSDDataset(stage='test', root=root_path, remove_h = self.remove_h, prop2idx=prop2idx,
                                        transform=transform)}
         super().__init__(cfg, datasets)
