@@ -1,6 +1,7 @@
 name: 'moses'
 datadir: 'data/moses/moses_pyg/'                 # Relative to the moses_dataset.py file
 remove_h: True
-filter: False
+filter: True
 phore: ['Aromatic', 'Hydrophobe', 'Acceptor', 'Donor']
-atom_type_to_atomic_number: {0: 6, 1: 7, 2: 8, 3: 9, 4: 16, 5: 17, 6: 35}
+# atom_type_to_atomic_number: {0: 1, 1: 6, 2: 7, 3: 8, 4: 9, 5: 16, 6: 17, 7: 35}
+atom_type_to_atomic_number: {0: 6, 1: 7, 2: 8, 3: 9, 4: 16, 5: 17, 6: 35, 7: 1}

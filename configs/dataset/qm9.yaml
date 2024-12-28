@@ -1,7 +1,8 @@
 name: 'qm9'            # qm9, qm9_positional
 datadir: 'data/qm9/qm9_pyg/'
-remove_h: false
+remove_h: True
 random_subset: null
 pin_memory: False
 phore: ['Aromatic', 'Hydrophobe', 'Acceptor', 'Donor']
-atom_type_to_atomic_number: {0: 1, 1: 6, 2: 7, 3: 8, 4: 9}
+# atom_type_to_atomic_number: {0: 1, 1: 6, 2: 7, 3: 8, 4: 9}
+atom_type_to_atomic_number: {0: 6, 1: 7, 2: 8, 3: 9}

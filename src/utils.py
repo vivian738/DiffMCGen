@@ -60,10 +60,8 @@ def unnormalize(X, E, y, norm_values, norm_biases, node_mask, collapse=False):
     return PlaceHolder(X=X, E=E, y=y).mask(node_mask, collapse)
 
 
-def to_dense(x, pos, edge_index, edge_attr, batch, y):
+def to_dense(x, edge_index, edge_attr, batch, y):
     X, node_mask = to_dense_batch(x=x, batch=batch)
-    pos, _ = to_dense_batch(x=pos, batch=batch)
-    pos = pos.float()
     # node_mask = node_mask.float()
     edge_index, edge_attr = torch_geometric.utils.remove_self_loops(edge_index, edge_attr)
     # TODO: carefully check if setting node_mask as a bool breaks the continuous case
@@ -72,7 +70,7 @@ def to_dense(x, pos, edge_index, edge_attr, batch, y):
     E = encode_no_edge(E)
     # y = torch.stack(y, dim=0)
 
-    return PlaceHolder(X=X, E=E, pos=pos, y=y), node_mask
+    return PlaceHolder(X=X, E=E, y=y), node_mask
 
 
 def encode_no_edge(E):
@@ -114,9 +112,8 @@ def update_config_with_new_keys(cfg, saved_cfg):
 
 
 class PlaceHolder:
-    def __init__(self, X, E, pos, y):
+    def __init__(self, X, E, y):
         self.X = X
-        self.pos = pos
         self.E = E
         self.y = y
 
@@ -125,17 +122,13 @@ class PlaceHolder:
         self.X = self.X.type_as(x)
         self.E = self.E.type_as(x)
         self.y = self.y.to(x.device)
-        if self.pos is not None:
-            self.pos = self.pos.to(x.device)
         return self
 
     def mask(self, node_mask, collapse=False):
-        bs, n = node_mask.shape
         x_mask = node_mask.unsqueeze(-1)          # bs, n, 1
         e_mask1 = x_mask.unsqueeze(2)             # bs, n, 1, 1
         e_mask2 = x_mask.unsqueeze(1)             # bs, 1, n, 1
-        diag_mask = ~torch.eye(n, dtype=torch.bool,
-                               device=node_mask.device).unsqueeze(0).expand(bs, -1, -1).unsqueeze(-1)  # bs, n, n, 1
+
         if collapse:
             self.X = torch.argmax(self.X, dim=-1)
             self.E = torch.argmax(self.E, dim=-1)
@@ -144,10 +137,7 @@ class PlaceHolder:
             self.E[(e_mask1 * e_mask2).squeeze(-1) == 0] = - 1
         else:
             self.X = self.X * x_mask
-            self.E = self.E * e_mask1 * e_mask2 * diag_mask
-            if self.pos is not None:
-                self.pos = self.pos * x_mask
-                self.pos = self.pos - self.pos.mean(dim=1, keepdim=True)
+            self.E = self.E * e_mask1 * e_mask2
             assert torch.allclose(self.E, torch.transpose(self.E, 1, 2))
         return self
 

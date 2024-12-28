@@ -13,7 +13,7 @@ class DummyExtraFeatures:
         empty_x = X.new_zeros((*X.shape[:-1], 0))
         empty_e = E.new_zeros((*E.shape[:-1], 0))
         empty_y = y.new_zeros((y.shape[0], 0))
-        return utils.PlaceHolder(X=empty_x, E=empty_e, pos=None, y=empty_y)
+        return utils.PlaceHolder(X=empty_x, E=empty_e, y=empty_y)
 
 
 class ExtraFeatures:
@@ -21,7 +21,7 @@ class ExtraFeatures:
         self.max_n_nodes = dataset_info.max_n_nodes
         self.ncycles = NodeCycleFeatures()
         self.features_type = extra_features_type
-        if extra_features_type in ['eigenvalues', 'all', 'connectivity']:
+        if extra_features_type in ['eigenvalues', 'all']:
             self.eigenfeatures = EigenFeatures(mode=extra_features_type)
 
     def __call__(self, noisy_data):
@@ -31,22 +31,15 @@ class ExtraFeatures:
         if self.features_type == 'cycles':
             E = noisy_data['E_t']
             extra_edge_attr = torch.zeros((*E.shape[:-1], 0)).type_as(E)
-            return utils.PlaceHolder(X=x_cycles, E=extra_edge_attr, pos=None, y=torch.hstack((n, y_cycles)))
-        
-        elif self.features_type =='connectivity':
-            extra_edge_attr = connectivity_feature(noisy_data['E_t'], noisy_data['node_mask'])
-            empty_x = noisy_data['X_t'].new_zeros((*noisy_data['X_t'].shape[:-1], 0))
-            empty_y = noisy_data['y_t'].new_zeros((noisy_data['y_t'].shape[0], 0))
-            return utils.PlaceHolder(X=empty_x, E=extra_edge_attr, pos=None, y=empty_y)
+            return utils.PlaceHolder(X=x_cycles, E=extra_edge_attr, y=torch.hstack((n, y_cycles)))
 
         elif self.features_type == 'eigenvalues':
             eigenfeatures = self.eigenfeatures(noisy_data)
             E = noisy_data['E_t']
             extra_edge_attr = torch.zeros((*E.shape[:-1], 0)).type_as(E)
             n_components, batched_eigenvalues = eigenfeatures   # (bs, 1), (bs, 10)
-            return utils.PlaceHolder(X=x_cycles, E=extra_edge_attr, 
-                                     pos=None,
-                                     y=torch.hstack((n, y_cycles, n_components, batched_eigenvalues)))
+            return utils.PlaceHolder(X=x_cycles, E=extra_edge_attr, y=torch.hstack((n, y_cycles, n_components,
+                                                                                    batched_eigenvalues)))
         elif self.features_type == 'all':
             eigenfeatures = self.eigenfeatures(noisy_data)
             E = noisy_data['E_t']
@@ -56,13 +49,9 @@ class ExtraFeatures:
 
             return utils.PlaceHolder(X=torch.cat((x_cycles, nonlcc_indicator, k_lowest_eigvec), dim=-1),
                                      E=extra_edge_attr,
-                                     pos=None,
                                      y=torch.hstack((n, y_cycles, n_components, batched_eigenvalues)))
         else:
-            empty_x = noisy_data['X_t'].new_zeros((*noisy_data['X_t'].shape[:-1], 0))
-            empty_e = noisy_data['E_t'].new_zeros((*noisy_data['E_t'].shape[:-1], 0))
-            empty_y = noisy_data['y_t'].new_zeros((noisy_data['y_t'].shape[0], 0))
-            return utils.PlaceHolder(X=empty_x, E=empty_e, y=empty_y, pos=None)
+            raise ValueError(f"Features type {self.features_type} not implemented")
 
 
 class NodeCycleFeatures:
@@ -86,10 +75,9 @@ class EigenFeatures:
     """
     Code taken from : https://github.com/Saro00/DGN/blob/master/models/pytorch/eigen_agg.py
     """
-    def __init__(self, mode, eigenvalue_threshold=0.1):
+    def __init__(self, mode):
         """ mode: 'eigenvalues' or 'all' """
         self.mode = mode
-        self.eigenvalue_threshold = eigenvalue_threshold
 
     def __call__(self, noisy_data):
         E_t = noisy_data['E_t']
@@ -111,8 +99,6 @@ class EigenFeatures:
             eigvals, eigvectors = torch.linalg.eigh(L)
             eigvals = eigvals.type_as(A) / torch.sum(mask, dim=1, keepdim=True)
             eigvectors = eigvectors * mask.unsqueeze(2) * mask.unsqueeze(1)
-            # # Filter eigenvalues to suppress large cycles
-            # eigvals = torch.clamp(eigvals, min=self.eigenvalue_threshold)
             # Retrieve eigenvalues features
             n_connected_comp, batch_eigenvalues = get_eigenvalues_features(eigenvalues=eigvals)
 
@@ -124,16 +110,6 @@ class EigenFeatures:
         else:
             raise NotImplementedError(f"Mode {self.mode} is not implemented")
 
-
-def connectivity_feature(E, node_mask, iterations=15):
-    E_t = E    
-    mask = node_mask
-    A = E_t[..., 1:].sum(dim=-1).float() * mask.unsqueeze(1) * mask.unsqueeze(2)
-    current = A
-    for i in range(iterations):
-        current = A @ current
-    current = (current == 0).float().unsqueeze(-1)
-    return current
 
 def compute_laplacian(adjacency, normalize: bool):
     """
@@ -169,7 +145,7 @@ def get_eigenvalues_features(eigenvalues, k=5):
     ev = eigenvalues
     bs, n = ev.shape
     n_connected_components = (ev < 1e-5).sum(dim=-1)
-    # assert (n_connected_components > 0).all(), (n_connected_components, ev)
+    assert (n_connected_components > 0).all(), (n_connected_components, ev)
 
     to_extend = max(n_connected_components) + k - n
     if to_extend > 0:
@@ -274,8 +250,6 @@ class KNodeCycles:
         term9_t = batch_diagonal(self.k2_matrix).pow(2).sum(-1)
         term10_t = batch_trace(self.k2_matrix)
 
-        # c6_local = (term_1_t - 3 * term_2_t + 9 * term3_t - 6 * term_4_t + 6 * term_5_t- 4 *term_6_t).unsqueeze(-1).float()
-        # c6_global = (4 * term_7_t + 3 * term8_t - 12 * term9_t + 4 * term10_t).unsqueeze(-1).float()
         c6_t = (term_1_t - 3 * term_2_t + 9 * term3_t - 6 * term_4_t + 6 * term_5_t - 4 * term_6_t + 4 * term_7_t +
                 3 * term8_t - 12 * term9_t + 4 * term10_t)
         return None, (c6_t / 12).unsqueeze(-1).float()

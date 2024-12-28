@@ -82,36 +82,33 @@ class TrainLossDiscrete(nn.Module):
         log : boolean. """
 
         bs, n = node_mask.shape
-        # true_X = torch.reshape(true_X, (-1, true_X.size(-1)))  # (bs * n, dx)
-        # true_E = torch.reshape(true_E, (-1, true_E.size(-1)))  # (bs * n * n, de)
-        # masked_pred_X = torch.reshape(masked_pred_X, (-1, masked_pred_X.size(-1)))  # (bs * n, dx)
-        # masked_pred_E = torch.reshape(masked_pred_E, (-1, masked_pred_E.size(-1)))   # (bs * n * n, de)
+        true_X = torch.reshape(true_X, (-1, true_X.size(-1)))  # (bs * n, dx)
+        true_E = torch.reshape(true_E, (-1, true_E.size(-1)))  # (bs * n * n, de)
+        masked_pred_X = torch.reshape(masked_pred_X, (-1, masked_pred_X.size(-1)))  # (bs * n, dx)
+        masked_pred_E = torch.reshape(masked_pred_E, (-1, masked_pred_E.size(-1)))   # (bs * n * n, de)
 
         # Remove masked rows
-        # mask_X = (true_X != 0.).any(dim=-1)
-        diag_mask = ~torch.eye(masked_pred_X.size(1), device=node_mask.device, dtype=torch.bool).unsqueeze(0).repeat(bs, 1, 1)
-        edge_mask = diag_mask & node_mask.unsqueeze(-1) & node_mask.unsqueeze(-2)
-        # mask_E = (true_E != 0.).any(dim=-1)
+        mask_X = (true_X != 0.).any(dim=-1)
+        mask_E = (true_E != 0.).any(dim=-1)
 
-        flat_true_X = true_X[node_mask]
-        flat_pred_X = masked_pred_X[node_mask]
+        flat_true_X = true_X[mask_X, :]
+        flat_pred_X = masked_pred_X[mask_X, :]
 
-        flat_true_E = true_E[edge_mask]
-        flat_pred_E = masked_pred_E[edge_mask]
+        flat_true_E = true_E[mask_E, :]
+        flat_pred_E = masked_pred_E[mask_E, :]
 
         loss_X = self.node_loss(flat_pred_X, flat_true_X) if true_X.numel() > 0 else 0.0
         loss_E = self.edge_loss(flat_pred_E, flat_true_E) if true_E.numel() > 0 else 0.0
         loss_y = self.y_loss(pred_y, true_y) if true_y.numel() > 0 else 0.0
-        # cross_edge = self.cross_active_edge(active_edge_t0.exp(), flat_true_E) if true_E.numel() > 0 else 0.0
 
         if log:
-            to_log = {"train_loss/batch_CE": (self.lambda_train[0] * loss_X + self.lambda_train[1] * loss_E  + self.lambda_train[2] * loss_y).detach(),
-                      "train_loss/X_CE": self.lambda_train[0] *self.node_loss.compute() if true_X.numel() > 0 else -1,
-                      "train_loss/E_CE": self.lambda_train[1] *self.edge_loss.compute() if true_E.numel() > 0 else -1,
-                      "train_loss/y_CE": self.lambda_train[2] *self.y_loss.compute() if true_y.numel() > 0 else -1}
+            to_log = {"train_loss/batch_CE": (loss_X + loss_E + loss_y).detach(),
+                      "train_loss/X_CE": self.node_loss.compute() if true_X.numel() > 0 else -1,
+                      "train_loss/E_CE": self.edge_loss.compute() if true_E.numel() > 0 else -1,
+                      "train_loss/y_CE": self.y_loss.compute() if true_y.numel() > 0 else -1}
             if wandb.run:
                 wandb.log(to_log, commit=True)
-        return self.lambda_train[0] * loss_X + self.lambda_train[1] * loss_E  + self.lambda_train[2] * loss_y
+        return loss_X + self.lambda_train[0] * loss_E + self.lambda_train[1] * loss_y
 
     def reset(self):
         for metric in [self.node_loss, self.edge_loss, self.y_loss]:
@@ -198,23 +195,15 @@ class LEFTLossDiscrete(nn.Module):
     def __init__(self, atom_type_to_atomic_number):
         super().__init__()
         self.loss_pos = MeanSquaredError(sync_on_compute=False, dist_sync_on_step=False)
-        self.loss_cond = CrossEntropyMetric()
+        self.loss_cond = MeanAbsoluteError()
         self.atom_type_to_atomic_number = atom_type_to_atomic_number
     
-    def forward(self, net_out, pos, true_X, node_mask, log:bool):
+    def forward(self, net_out, pos_t, pos, atom_noise, node_mask, log:bool):
         node_gt, pos_gt = net_out
-        vel = pos_gt - pos
-        if torch.any(torch.isnan(vel)):
-            print("Warning: detected nan in pos, resetting EGNN output to randn.")
-            pos_gt = vel + torch.randn_like(vel) * 1e-6 + pos
-        loss_pos = self.loss_pos(pos_gt[node_mask], pos[node_mask])
-        masked_pred_X = torch.reshape(node_gt, (-1, node_gt.size(-1)))
-        true_X = torch.reshape(true_X, (-1, true_X.size(-1)))  # (bs * n, dx)
-        mask_X = (true_X != 0.).any(dim=-1)
-
-        flat_true_X = true_X[mask_X, :]
-        flat_pred_X = masked_pred_X[mask_X, :]
-        loss_cond = self.loss_cond(flat_pred_X, flat_true_X) if true_X.numel() > 0 else 0.0
+        pos_noise = pos_t - pos
+        loss_pos = self.loss_pos(pos_gt[node_mask], pos_noise[node_mask])
+        
+        loss_cond = self.loss_cond(node_gt[node_mask], atom_noise[node_mask])
         loss = 5 * loss_pos + loss_cond
         if log:
             to_log = {
@@ -229,7 +218,7 @@ class LEFTLossDiscrete(nn.Module):
 
     def log_epoch_metrics(self):
         pos_loss = self.loss_pos.compute() if self.loss_pos.total > 0 else -1
-        cond_loss = self.loss_cond.compute() if self.loss_cond.total_samples > 0 else -1
+        cond_loss = self.loss_cond.compute() if self.loss_cond.total > 0 else -1
         
         to_log = {
             "train_epoch/pos_loss": pos_loss,

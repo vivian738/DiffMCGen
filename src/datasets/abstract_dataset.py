@@ -129,4 +129,4 @@ class AbstractDatasetInfos:
         self.output_dims = {'X': example_batch['x'].size(1),
                             'pos': example_batch['pos'].size(1),
                             'E': example_batch['edge_attr'].size(1),
-                            'y': 0}
+                            'y': example_batch['y'].size(1)}

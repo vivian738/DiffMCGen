@@ -5,18 +5,17 @@ import utils
 class ExtraMolecularFeatures:
     def __init__(self, dataset_infos):
         self.charge = ChargeFeature(remove_h=dataset_infos.remove_h, valencies=dataset_infos.valencies)
-        # self.valency = ValencyFeature()
-        # self.weight = RingCFeature(max_weight=dataset_infos.max_weight, atom_weights=dataset_infos.atom_weights)
+        self.valency = ValencyFeature()
+        self.weight = WeightFeature(max_weight=dataset_infos.max_weight, atom_weights=dataset_infos.atom_weights)
 
     def __call__(self, noisy_data):
         charge = self.charge(noisy_data).unsqueeze(-1)      # (bs, n, 1)
-        # valency = self.valency(noisy_data).unsqueeze(-1)    # (bs, n, 1)
-        # weight = self.weight(noisy_data)                    # (bs, 1)
-        empty_y = noisy_data['y_t'].new_zeros((noisy_data['y_t'].shape[0], 0))
+        valency = self.valency(noisy_data).unsqueeze(-1)    # (bs, n, 1)
+        weight = self.weight(noisy_data)                    # (bs, 1)
 
         extra_edge_attr = torch.zeros((*noisy_data['E_t'].shape[:-1], 0)).type_as(noisy_data['E_t'])
 
-        return utils.PlaceHolder(X=charge, E=extra_edge_attr, pos=None, y=empty_y)
+        return utils.PlaceHolder(X=torch.cat((charge, valency), dim=-1), E=extra_edge_attr, y=weight)
 
 
 class ChargeFeature:
@@ -47,7 +46,7 @@ class ValencyFeature:
         return valencies.type_as(noisy_data['X_t'])
 
 
-class RingCFeature:
+class WeightFeature:
     def __init__(self, max_weight, atom_weights):
         self.max_weight = max_weight
         self.atom_weight_list = torch.tensor(list(atom_weights.values()))

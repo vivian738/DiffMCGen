@@ -3,7 +3,7 @@ from torch.nn import functional as F
 import numpy as np
 import math
 
-from utils import PlaceHolder, remove_mean_with_mask
+from utils import PlaceHolder
 
 
 def sum_except_batch(x):
@@ -62,7 +62,7 @@ def cosine_beta_schedule(timesteps, s=0.008, raise_to_power: float = 1):
     return alphas_cumprod
 
 
-def cosine_beta_schedule_discrete(timesteps, s=0.01):
+def cosine_beta_schedule_discrete(timesteps, s=0.008):
     """ Cosine schedule as proposed in https://openreview.net/forum?id=-NEXDKk8gZ. """
     steps = timesteps + 2
     x = np.linspace(0, steps, steps)
@@ -71,8 +71,6 @@ def cosine_beta_schedule_discrete(timesteps, s=0.01):
     alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
     alphas = (alphas_cumprod[1:] / alphas_cumprod[:-1])
     betas = 1 - alphas
-    betas = np.clip(betas, 1e-6, 0.02)
-
     return betas.squeeze()
 
 
@@ -98,15 +96,6 @@ def custom_beta_schedule_discrete(timesteps, average_num_nodes=50, s=0.008):
     betas[betas < beta_first] = beta_first
     return np.array(betas)
 
-
-def sigmoid_beta_schedule_discrete(timesteps, beta_start=1.e-7, beta_end=2.e-3):
-    def sigmoid(x):
-        return 1 / (np.exp(-x) + 1)
-    
-    steps = timesteps + 1
-    betas = np.linspace(-6, 6, steps)
-    betas = sigmoid(betas) * (beta_end - beta_start) + beta_start
-    return betas
 
 
 def gaussian_KL(q_mu, q_sigma):
@@ -245,7 +234,7 @@ def sample_discrete_features(probX, probE, node_mask):
     ''' Sample features from multinomial distribution with given probabilities (probX, probE, proby)
         :param probX: bs, n, dx_out        node features
         :param probE: bs, n, n, de_out     edge features
-        :param proby: bs, n1, dy_out           global features.
+        :param proby: bs, dy_out           global features.
     '''
     bs, n, _ = probX.shape
     # Noise X
@@ -274,18 +263,7 @@ def sample_discrete_features(probX, probE, node_mask):
     E_t = torch.triu(E_t, diagonal=1)
     E_t = (E_t + torch.transpose(E_t, 1, 2))
 
-    # Noise y
-
-    # Flatten the probability tensor to sample with multinomial
-    # if proby is not None:
-    #     proby = proby.reshape(bs * 1, -1).clamp(min=1e-10)  # (bs * 1, dy_out)
-
-    #     # Sample y
-    #     y_t = proby.multinomial(1)  # (bs * 1, 1)
-    # else:
-    y_t = torch.zeros(bs, 0).type_as(X_t)
-
-    return PlaceHolder(X=X_t, E=E_t, pos=None, y=y_t)
+    return PlaceHolder(X=X_t, E=E_t, y=torch.zeros(bs, 0).type_as(X_t))
 
 
 def compute_posterior_distribution(M, M_t, Qt_M, Qsb_M, Qtb_M):
@@ -378,15 +356,11 @@ def mask_distributions(true_X, true_E, pred_X, pred_E, node_mask):
     return true_X, true_E, pred_X, pred_E
 
 
-def posterior_distributions(X, E, X_t, E_t, Qt, Qsb, Qtb):
+def posterior_distributions(X, E, y, X_t, E_t, y_t, Qt, Qsb, Qtb):
     prob_X = compute_posterior_distribution(M=X, M_t=X_t, Qt_M=Qt.X, Qsb_M=Qsb.X, Qtb_M=Qtb.X)   # (bs, n, dx)
     prob_E = compute_posterior_distribution(M=E, M_t=E_t, Qt_M=Qt.E, Qsb_M=Qsb.E, Qtb_M=Qtb.E)   # (bs, n * n, de)
-    # y = y.unsqueeze(1)
-    # y_t = y_t.unsqueeze(1)
-    # prob_y = compute_posterior_distribution(M=y, M_t=y_t, Qt_M=Qt.y, Qsb_M=Qsb.y, Qtb_M=Qtb.y)
-    # prob_y = torch.clamp(prob_y, min=0)
 
-    return PlaceHolder(X=prob_X, E=prob_E, pos =None, y=None)
+    return PlaceHolder(X=prob_X, E=prob_E, y=y_t)
 
 
 def sample_discrete_feature_noise(limit_dist, node_mask):
@@ -398,7 +372,6 @@ def sample_discrete_feature_noise(limit_dist, node_mask):
     U_X = x_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max)
     U_E = e_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max, n_max)
     U_y = torch.empty((bs, 0))
-    # U_y = torch.empty((bs, 4))
 
     long_mask = node_mask.long()
     U_X = U_X.type_as(long_mask)
@@ -407,7 +380,6 @@ def sample_discrete_feature_noise(limit_dist, node_mask):
 
     U_X = F.one_hot(U_X, num_classes=x_limit.shape[-1]).float()
     U_E = F.one_hot(U_E, num_classes=e_limit.shape[-1]).float()
-    # U_y = F.one_hot(U_y, num_classes=y_limit.shape[-1]).float().squeeze(1)
 
     # Get upper triangular part of edge noise, without main diagonal
     upper_triangular_mask = torch.zeros_like(U_E)
@@ -419,152 +391,6 @@ def sample_discrete_feature_noise(limit_dist, node_mask):
 
     assert (U_E == torch.transpose(U_E, 1, 2)).all()
 
-    pos = torch.randn(node_mask.shape[0], node_mask.shape[1], 3, device=node_mask.device)
-    pos = pos * node_mask.unsqueeze(-1)
-    pos = remove_mean_with_mask(pos, node_mask)
+    return PlaceHolder(X=U_X, E=U_E, y=U_y).mask(node_mask)
 
 
-    return PlaceHolder(X=U_X, E=U_E, pos=pos, y=U_y).mask(node_mask)
-
-
-def get_timestep_embedding(timesteps, embedding_dim):
-    """
-    This matches the implementation in Denoising Diffusion Probabilistic Models:
-    From Fairseq.
-    Build sinusoidal embeddings.
-    This matches the implementation in tensor2tensor, but differs slightly
-    from the description in Section 3.5 of "Attention Is All You Need".
-    """
-    assert len(timesteps.shape) == 1
-
-    half_dim = embedding_dim // 2
-    emb = math.log(10000) / (half_dim - 1)
-    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
-    emb = emb.to(device=timesteps.device)
-    emb = timesteps.float()[:, None] * emb[None, :]
-    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-    if embedding_dim % 2 == 1:  # zero pad
-        emb = torch.nn.functional.pad(emb, (0, 1, 0, 0))
-    return emb
-
-
-def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
-    def sigmoid(x):
-        return 1 / (np.exp(-x) + 1)
-
-    if beta_schedule == "quad":
-        betas = (
-                np.linspace(
-                    beta_start ** 0.5,
-                    beta_end ** 0.5,
-                    num_diffusion_timesteps,
-                    dtype=np.float64,
-                )
-                ** 2
-        )
-    elif beta_schedule == "linear":
-        betas = np.linspace(
-            beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64
-        )
-    elif beta_schedule == "const":
-        betas = beta_end * np.ones(num_diffusion_timesteps, dtype=np.float64)
-    elif beta_schedule == "jsd":  # 1/T, 1/(T-1), 1/(T-2), ..., 1
-        betas = 1.0 / np.linspace(
-            num_diffusion_timesteps, 1, num_diffusion_timesteps, dtype=np.float64
-        )
-    elif beta_schedule == "sigmoid":
-        betas = np.linspace(-6, 6, num_diffusion_timesteps)
-        betas = sigmoid(betas) * (beta_end - beta_start) + beta_start
-    elif beta_schedule == "cosine":
-        return betas_for_alpha_bar(
-            num_diffusion_timesteps,
-            lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2,
-        )
-    else:
-        raise NotImplementedError(beta_schedule)
-    assert betas.shape == (num_diffusion_timesteps,)
-    return betas
-
-
-def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
-    """
-    Create a beta schedule that discretizes the given alpha_t_bar function,
-    which defines the cumulative product of (1-beta) over time from t = [0,1].
-    :param num_diffusion_timesteps: the number of betas to produce.
-    :param alpha_bar: a lambda that takes an argument t from 0 to 1 and
-                      produces the cumulative product of (1-beta) up to that
-                      part of the diffusion process.
-    :param max_beta: the maximum beta to use; use values lower than 1 to
-                     prevent singularities.
-    """
-    betas = []
-    for i in range(num_diffusion_timesteps):
-        t1 = i / num_diffusion_timesteps
-        t2 = (i + 1) / num_diffusion_timesteps
-        betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
-    return np.array(betas)
-
-class SinkhornDistance(torch.nn.Module):
-    r"""
-    Given two empirical measures each with :math:`P_1` locations
-    :math:`x\in\mathbb{R}^{D_1}` and :math:`P_2` locations :math:`y\in\mathbb{R}^{D_2}`,
-    outputs an approximation of the regularized OT cost for point clouds.
-    Args:
-        eps (float): regularization coefficient
-        max_iter (int): maximum number of Sinkhorn iterations
-        reduction (string, optional): Specifies the reduction to apply to the output:
-            'none' | 'mean' | 'sum'. 'none': no reduction will be applied,
-            'mean': the sum of the output will be divided by the number of
-            elements in the output, 'sum': the output will be summed. Default: 'none'
-    Shape:
-        - Input: :math:`(N, P_1, D_1)`, :math:`(N, P_2, D_2)`
-        - Output: :math:`(N)` or :math:`()`, depending on `reduction`
-    """
-    def __init__(self, eps=1e-3, max_iter=200, reduction='none'):
-        super(SinkhornDistance, self).__init__()
-        self.eps = eps
-        self.max_iter = max_iter
-        self.reduction = reduction
-
-    def forward(self, mu, nu, C):
-        u = torch.zeros_like(mu)
-        v = torch.zeros_like(nu)
-        # To check if algorithm terminates because of threshold
-        # or max iterations reached
-        actual_nits = 0
-        # Stopping criterion
-        thresh = 1e-1
-
-        # Sinkhorn iterations
-        for i in range(self.max_iter):
-            u1 = u  # useful to check the update
-            u = self.eps * (torch.log(mu+1e-8) - torch.logsumexp(self.M(C, u, v), dim=-1)) + u
-            v = self.eps * (torch.log(nu+1e-8) - torch.logsumexp(self.M(C, u, v).transpose(-2, -1), dim=-1)) + v
-            err = (u - u1).abs().sum(-1).mean()
-
-            actual_nits += 1
-            if err.item() < thresh:
-                break
-
-        U, V = u, v
-        # Transport plan pi = diag(a)*K*diag(b)
-        pi = torch.exp(self.M(C, U, V))
-        # Sinkhorn distance
-        cost = torch.sum(pi * C, dim=(-2, -1))
-        self.actual_nits = actual_nits
-        if self.reduction == 'mean':
-            cost = cost.mean()
-        elif self.reduction == 'sum':
-            cost = cost.sum()
-
-        return cost, pi, C
-
-    def M(self, C, u, v):
-        "Modified cost for logarithmic updates"
-        "$M_{ij} = (-c_{ij} + u_i + v_j) / \epsilon$"
-        return (-C + u.unsqueeze(-1) + v.unsqueeze(-2)) / self.eps
-
-    @staticmethod
-    def ave(u, u1, tau):
-        "Barycenter subroutine, used by kinetic acceleration through extrapolation."
-        return tau * u + (1 - tau) * u1

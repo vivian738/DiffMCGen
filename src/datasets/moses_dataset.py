@@ -29,6 +29,7 @@ import multiprocessing
 import joblib
 import csv
 
+atom_decoder = ['C', 'N', 'S', 'O', 'F', 'Cl', 'Br', 'H']
 def files_exist(files) -> bool:
     # NOTE: We return `False` in case `files` is empty, leading to a
     # re-processing of files on every instantiation.
@@ -245,7 +246,6 @@ class MOSESDataset(InMemoryDataset):
 
     def process(self):
         RDLogger.DisableLog('rdApp.*')
-        atom_decoder = ['H', 'C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
         charge_dict = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'S': 16, 'Cl': 17, 'Br': 35}
 
         types = {atom: i for i, atom in enumerate(atom_decoder)}
@@ -253,10 +253,10 @@ class MOSESDataset(InMemoryDataset):
         bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
 
         path = self.split_paths[self.file_idx]
-        if self.file_idx == 0:
-            sampled_df = pd.read_csv(path).sample(frac=1/3, random_state=42)
-        else:
-            sampled_df = pd.read_csv(path)
+        # if self.file_idx == 0:
+        #     sampled_df = pd.read_csv(path).sample(frac=1/3, random_state=42)
+        # else:
+        sampled_df = pd.read_csv(path)
         smiles_list = sampled_df['smiles'].values
         sampled_array = sampled_df.iloc[:, 1:].to_numpy()
         target = torch.tensor(sampled_array, dtype=torch.float)
@@ -267,28 +267,27 @@ class MOSESDataset(InMemoryDataset):
         for i, smile in enumerate(tqdm(smiles_list)):
             mol = Chem.MolFromSmiles(smile)
             N = mol.GetNumAtoms()
-            m = Chem.AddHs(mol)
+            # m = Chem.AddHs(mol)
             try:
-                AllChem.EmbedMolecule(m, useRandomCoords=True)
-                AllChem.MMFFOptimizeMolecule(m)
+                AllChem.EmbedMolecule(mol, useRandomCoords=True)
+                AllChem.MMFFOptimizeMolecule(mol)
             except ValueError:
                 continue
                 
             # mol = Chem.RemoveHs(m)
-            mol = m
+            # mol = m
             conf = mol.GetConformer()
             pos = conf.GetPositions()
             pos = torch.tensor(pos, dtype=torch.float)
             posc = pos - pos.mean(dim=0)
 
-            charges = []
+            # charges = []
             formal_charges = []
 
             type_idx = []
             for atom in mol.GetAtoms():
                 atom_str = atom.GetSymbol()
                 type_idx.append(types[atom_str])
-                charges.append(charge_dict[atom_str])
                 formal_charges.append(atom.GetFormalCharge())
 
             row, col, edge_type = [], [], []
@@ -310,49 +309,42 @@ class MOSESDataset(InMemoryDataset):
             edge_attr = edge_attr[perm]
 
             x = F.one_hot(torch.tensor(type_idx), num_classes=len(types)).float()
-            atom_type = torch.tensor(type_idx)
             # y = torch.zeros(size=(1, 0), dtype=torch.float)
             y = target[i].unsqueeze(0)
-            if self.remove_h:
-                type_idx = torch.tensor(type_idx).long()
-                to_keep = type_idx > 0
-                edge_index, edge_attr = subgraph(to_keep, edge_index, edge_attr, relabel_nodes=True,
-                                                 num_nodes=len(to_keep))
-                x = x[to_keep]
-                posc = posc[to_keep]
-                # Shift onehot encoding to match atom decoder
-                x = x[:, 1:]
-                atom_type = atom_type[to_keep] 
-                charges = torch.tensor(charges)[to_keep]
-                formal_charges = torch.tensor(formal_charges)[to_keep]
+            
 
-            data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
-                        y=y, idx=i, pos=posc, charge=charges, fc=formal_charges,
+            data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr,
+                        y=y, idx=i, pos=posc, fc=formal_charges,
                         rdmol=copy.deepcopy(mol))
 
             if self.filter_dataset:
                 # Try to build the molecule again from the graph. If it fails, do not add it to the training set
-                dense_data, node_mask = utils.to_dense(data.x, data.pos, data.edge_index, data.edge_attr, data.batch, data.y)
-                dense_data = dense_data.mask(node_mask, collapse=True)
-                X, E = dense_data.X, dense_data.E
+                # dense_data, node_mask = utils.to_dense(data.x, data.pos, data.edge_index, data.edge_attr, data.batch, data.y)
+                # dense_data = dense_data.mask(node_mask, collapse=True)
+                # X, E = dense_data.X, dense_data.E
 
-                assert X.size(0) == 1
-                atom_types = X[0]
-                edge_types = E[0]
-                conformers = data.pos[0]
-                mol = build_molecule_with_partial_charges(atom_types, edge_types, conformers, atom_decoder)
-                smiles = mol2smiles(mol)
-                if smiles is not None:
-                    try:
-                        mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
-                        if len(mol_frags) == 1:
-                            data_list.append(data)
-                            smiles_kept.append(smiles)
+                # assert X.size(0) == 1
+                # atom_types = X[0]
+                # edge_types = E[0]
+                # conformers = data.pos[0]
+                # mol = build_molecule_with_partial_charges(atom_types, edge_types, conformers, atom_decoder)
+                # smiles = mol2smiles(mol)
+                # if smiles is not None:
+                #     try:
+                #         mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
+                #         if len(mol_frags) == 1:
+                #             data_list.append(data)
+                #             smiles_kept.append(smiles)
 
-                    except Chem.rdchem.AtomValenceException:
-                        print("Valence error in GetmolFrags")
-                    except Chem.rdchem.KekulizeException:
-                        print("Can't kekulize molecule")
+                #     except Chem.rdchem.AtomValenceException:
+                #         print("Valence error in GetmolFrags")
+                #     except Chem.rdchem.KekulizeException:
+                #         print("Can't kekulize molecule")
+                if self.pre_filter is not None and not self.pre_filter(data):
+                    continue
+                if self.pre_transform is not None:
+                    data = self.pre_transform(data)
+                data_list.append(data)
             else:
                 if self.pre_filter is not None and not self.pre_filter(data):
                     continue
@@ -362,12 +354,12 @@ class MOSESDataset(InMemoryDataset):
 
         torch.save(self.collate(data_list), self.processed_paths[self.file_idx])
 
-        if self.filter_dataset:
-            smiles_save_path = osp.join(pathlib.Path(self.raw_paths[0]).parent, f'new_{self.stage}.smiles')
-            print(smiles_save_path)
-            with open(smiles_save_path, 'w') as f:
-                f.writelines('%s\n' % s for s in smiles_kept)
-            print(f"Number of molecules kept: {len(smiles_kept)} / {len(smiles_list)}")
+        # if self.filter_dataset:
+        #     smiles_save_path = osp.join(pathlib.Path(self.raw_paths[0]).parent, f'new_{self.stage}.smiles')
+        #     print(smiles_save_path)
+        #     with open(smiles_save_path, 'w') as f:
+        #         f.writelines('%s\n' % s for s in smiles_kept)
+        #     print(f"Number of molecules kept: {len(smiles_kept)} / {len(smiles_list)}")
 
     def compute_property_mean_mad(self, prop2idx):
         prop_values = []
@@ -419,9 +411,9 @@ class MosesDataModule(MolecularDataModule):
         base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
         root_path = os.path.join(base_path, self.datadir)
         datasets = {'train': MOSESDataset(stage='train', root=root_path, filter_dataset=self.filter_dataset,
-                                          remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, prop2idx=prop2idx, transform=transform),
+                                          remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, prop2idx=prop2idx, transform=RemoveYTransform()),
                     'val': MOSESDataset(stage='val', root=root_path, filter_dataset=self.filter_dataset, 
-                                        remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, prop2idx=prop2idx, transform=transform),
+                                        remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, prop2idx=prop2idx, transform=RemoveYTransform()),
                     'test': MOSESDataset(stage='test', root=root_path, filter_dataset=self.filter_dataset, 
                                         remove_h=cfg.dataset.remove_h, point_phore=cfg.dataset.phore, prop2idx=prop2idx, transform=transform)}
         super().__init__(cfg, datasets)
@@ -433,63 +425,36 @@ class MOSESinfos(AbstractDatasetInfos):
         self.name = 'MOSES'
         self.input_dims = None
         self.output_dims = None
-        self.remove_h = cfg.dataset.remove_h
+        self.remove_h = False
         self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
 
 
-        if self.remove_h == False:
-            self.atom_decoder = ['H', 'C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
-            self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
-            self.atom_weights = {0: 1, 1: 12, 2: 14, 3: 32, 4: 16, 5: 19, 6: 35.4, 7: 79.9}
-            self.valencies = [1, 4, 3, 4, 2, 1, 1, 1]
-            self.num_atom_types = len(self.atom_decoder)
-            self.max_weight = 500
-            
-            meta_files = dict(n_nodes=f'{self.name}_n_counts.txt',
-                            node_types=f'{self.name}_atom_types.txt',
-                            edge_types=f'{self.name}_edge_types.txt',
-                            valency_distribution=f'{self.name}_valencies.txt')
+        self.atom_decoder = atom_decoder
+        self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
+        self.atom_weights = {0: 12, 1: 14, 2: 32, 3: 16, 4: 19, 5: 35.4, 6: 79.9, 7: 1}
+        self.valencies = [4, 3, 4, 2, 1, 1, 1, 1]
+        self.num_atom_types = len(self.atom_decoder)
+        self.max_weight = 350
 
-            self.n_nodes = torch.tensor([0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00,
-                                        0.0000e+00, 0.0000e+00, 2.8397e-06, 0.0000e+00, 5.6795e-07, 5.6795e-06,
-                                        3.9756e-06, 1.8742e-05, 3.1805e-05, 3.1805e-05, 6.3610e-05, 1.1359e-04,
-                                        1.6584e-04, 1.7493e-04, 3.5099e-04, 4.7480e-04, 8.1046e-04, 1.2824e-03,
-                                        1.8782e-03, 2.7392e-03, 4.4584e-03, 6.3536e-03, 8.7890e-03, 1.2624e-02,
-                                        1.7098e-02, 2.2378e-02, 2.9360e-02, 3.5387e-02, 4.2517e-02, 4.9722e-02,
-                                        5.5761e-02, 6.0463e-02, 6.5334e-02, 6.6398e-02, 6.8688e-02, 6.6917e-02,
-                                        6.3352e-02, 5.9485e-02, 5.3930e-02, 4.7901e-02, 3.9722e-02, 3.2245e-02,
-                                        2.4240e-02, 2.0185e-02, 1.3103e-02, 9.1860e-03, 6.1918e-03, 4.4323e-03,
-                                        2.7244e-03, 1.3830e-03, 9.4563e-04, 3.3850e-04, 1.4823e-04, 5.3955e-05,
-                                        2.7829e-05, 6.2474e-06, 1.1359e-06])
-            self.max_n_nodes = len(self.n_nodes) - 1 if self.n_nodes is not None else None
-            self.node_types = torch.tensor([0.4538, 0.3943, 0.0745, 0.0089, 0.0567, 0.0078, 0.0030, 0.0008])
-            self.edge_types = torch.tensor([9.4731e-01, 3.7415e-02, 2.0810e-03, 1.0259e-04, 1.3092e-02])
-            self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
-            self.valency_distribution[:8] = torch.tensor([0.0000e+00, 4.0108e-01, 8.2538e-02, 1.1124e-01, 4.0108e-01, 1.1953e-06,
-        4.0429e-03, 2.0918e-05])
-        else:
-            self.atom_decoder = ['C', 'N', 'S', 'O', 'F', 'Cl', 'Br']
-            self.atom_encoder = {atom: i for i, atom in enumerate(self.atom_decoder)}
-            self.atom_weights = {0: 12, 1: 14, 2: 32, 3: 16, 4: 19, 5: 35.4, 6: 79.9}
-            self.valencies = [4, 3, 4, 2, 1, 1, 1]
-            self.num_atom_types = len(self.atom_decoder)
-            self.max_weight = 350
-            
-            meta_files = dict(n_nodes=f'{self.name}_n_counts.txt',
-                            node_types=f'{self.name}_atom_types.txt',
-                            edge_types=f'{self.name}_edge_types.txt',
-                            valency_distribution=f'{self.name}_valencies.txt')
+        meta_files = dict(n_nodes=f'{self.name}_n_counts.txt',
+                          node_types=f'{self.name}_atom_types.txt',
+                          edge_types=f'{self.name}_edge_types.txt',
+                          valency_distribution=f'{self.name}_valencies.txt')
 
-            self.n_nodes = torch.tensor([0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00,
-                                        0.0000e+00, 0.0000e+00, 3.4077e-06, 2.0446e-05, 5.5091e-05, 6.0202e-05,
-                                        1.3517e-04, 4.6345e-04, 2.3524e-03, 3.3492e-03, 6.8932e-03, 2.3576e-02,
-                                        5.5278e-02, 1.1133e-01, 1.2298e-01, 1.2805e-01, 1.4400e-01, 1.4964e-01,
-                                        1.4232e-01, 9.1484e-02, 1.8010e-02, 1.7038e-06])
-            self.max_n_nodes = len(self.n_nodes) - 1 if self.n_nodes is not None else None
-            self.node_types = torch.tensor([0.7220, 0.1364, 0.0164, 0.1038, 0.0143, 0.0055, 0.0015])
-            self.edge_types = torch.tensor([8.9733e-01, 4.7399e-02, 6.3060e-03, 3.5479e-04, 4.8611e-02])
-            self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
-            self.valency_distribution[:7] = torch.tensor([0.0000, 0.1063, 0.2730, 0.3604, 0.2498, 0.0054, 0.0050])
+        self.n_nodes = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.097634362347889692e-06,
+                                     1.858580617408733815e-05, 5.007842264603823423e-05, 5.678996240021660924e-05,
+                                     1.244216400664299726e-04, 4.486406978685408831e-04, 2.253012731671333313e-03,
+                                     3.231865121051669121e-03, 6.709992419928312302e-03, 2.289564721286296844e-02,
+                                     5.411050841212272644e-02, 1.099515631794929504e-01, 1.223291903734207153e-01,
+                                     1.280680745840072632e-01, 1.445975750684738159e-01, 1.505961418151855469e-01,
+                                     1.436946094036102295e-01, 9.265746921300888062e-02, 1.820066757500171661e-02,
+                                     2.065089574898593128e-06])
+        self.max_n_nodes = len(self.n_nodes) - 1 if self.n_nodes is not None else None
+        self.node_types = torch.tensor([0.722338, 0.13661, 0.163655, 0.103549, 0.1421803, 0.005411, 0.00150, 0.0])
+        self.edge_types = torch.tensor([0.89740, 0.0472947, 0.062670, 0.0003524, 0.0486])
+        self.valency_distribution = torch.zeros(3 * self.max_n_nodes - 2)
+        self.valency_distribution[:7] = torch.tensor([0.0, 0.1055, 0.2728, 0.3613, 0.2499, 0.00544, 0.00485])
+
         if meta is None:
             meta = dict(n_nodes=None, node_types=None, edge_types=None, valency_distribution=None)
         assert set(meta.keys()) == set(meta_files.keys())
@@ -511,7 +476,6 @@ class MOSESinfos(AbstractDatasetInfos):
             self.edge_types = datamodule.edge_counts()
             print("Distribution of edge types", self.edge_types)
             np.savetxt(meta_files["edge_types"], self.edge_types.numpy())
-
         if recompute_statistics or self.valency_distribution is None:
             valencies = datamodule.valency_count(self.max_n_nodes)
             print("Distribution of the valencies", valencies)
