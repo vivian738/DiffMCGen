@@ -195,16 +195,16 @@ class LEFTLossDiscrete(nn.Module):
     def __init__(self, atom_type_to_atomic_number):
         super().__init__()
         self.loss_pos = MeanSquaredError(sync_on_compute=False, dist_sync_on_step=False)
-        self.loss_cond = MeanAbsoluteError()
+        # self.loss_cond = MeanAbsoluteError()
         self.atom_type_to_atomic_number = atom_type_to_atomic_number
     
-    def forward(self, net_out, pos_t, pos, atom_noise, node_mask, log:bool):
+    def forward(self, net_out, pos_t, pos, node_mask, log:bool):
         node_gt, pos_gt = net_out
         pos_noise = pos_t - pos
         loss_pos = self.loss_pos(pos_gt[node_mask], pos_noise[node_mask])
         
-        loss_cond = self.loss_cond(node_gt[node_mask], atom_noise[node_mask])
-        loss = 5 * loss_pos + loss_cond
+        # loss_cond = self.loss_cond(node_gt[node_mask], atom_noise[node_mask])
+        loss = 5 * loss_pos
         if log:
             to_log = {
                     'train_loss/model2_loss': loss.detach()}
@@ -214,15 +214,14 @@ class LEFTLossDiscrete(nn.Module):
     
     def reset(self):
         self.loss_pos.reset()
-        self.loss_cond.reset()
+        # self.loss_cond.reset()
 
     def log_epoch_metrics(self):
         pos_loss = self.loss_pos.compute() if self.loss_pos.total > 0 else -1
-        cond_loss = self.loss_cond.compute() if self.loss_cond.total > 0 else -1
+        # cond_loss = self.loss_cond.compute() if self.loss_cond.total > 0 else -1
         
         to_log = {
-            "train_epoch/pos_loss": pos_loss,
-            "train_epoch/cond_loss": cond_loss}
+            "train_epoch/pos_loss": pos_loss}
         if wandb.run:
             wandb.log(to_log)
         return to_log

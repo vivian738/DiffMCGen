@@ -14,7 +14,7 @@ extra_features: 'all'        # 'all', 'cycles', 'eigenvalues' or null
 hidden_mlp_dims: {'X': 256, 'E': 128, 'y': 256, 'pos': 64}
 
 # The dimensions should satisfy dx % n_head == 0
-hidden_dims : {'dx': 256, 'de': 64, 'dy': 128, 'n_head': 16, 'dim_ffX': 256, 'dim_ffE': 128, 'dim_ffy': 256}
+hidden_dims : {'dx': 256, 'de': 64, 'dy': 128, 'n_head': 8, 'dim_ffX': 256, 'dim_ffE': 128, 'dim_ffy': 256}
 
 # lambda_train: [0.0738, 0.2828, 0.6434]
 lambda_train: [5, 0]
@@ -40,10 +40,10 @@ lambda_train: [5, 0]
 
 # LEFTNet
 num_layers: 6
-hidden_channels: 128
+hidden_channels: 64
 num_radial: 32
 cutoff: 10
-num_atomic: 35  #csd:53 moses: 35 qm9:9
+num_atomic: 53  #csd:53 moses: 35 qm9:9
 pos_require_grad: True
 # context: ['gap', 'mu', 'homo', 'lumo']
-context: ['hpk1_score', 'SA', 'QED', 'acute_tox']
+context: ['lrrk2_score', 'SA', 'QED', 'acute_tox']

@@ -1,7 +1,7 @@
 # General settings
-name: 'moses_dual_hpk1'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
+name: 'moses_dual_lrrk2'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
 
-wandb: 'online'             # online | offline | disabled
+wandb: 'offline'             # online | offline | disabled
 gpus: 2                   # Multi-gpu is not implemented on this branch
 guidance_target: 'EdgeComCondMulti'
 regressor: True
@@ -11,10 +11,10 @@ resume: null        # If resume, path to ckpt file from outputs directory in mai
 test_only: null
 # test_only: '/raid/yyw/PharmDiGress/outputs/2024-12-16/20-28-18-moses_dual_hpk1/checkpoints/moses_dual_hpk1_resume/last.ckpt'         # Use absolute path
 
-check_val_every_n_epochs: 5
-sample_every_val: 4
+check_val_every_n_epochs: 2
+sample_every_val: 2
 # val_check_interval: 200
-samples_to_generate: 1024       # We advise to set it to 2 x batch_size maximum
+samples_to_generate: 128       # We advise to set it to 2 x batch_size maximum
 samples_to_save: 20
 chains_to_save: 1
 log_every_steps: 20

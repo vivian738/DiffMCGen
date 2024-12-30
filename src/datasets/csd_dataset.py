@@ -197,7 +197,7 @@ class CSDDataset(InMemoryDataset):
         if self.remove_h:
             return ['proc_tr_no_h.pt', 'proc_val_no_h.pt', 'proc_test_no_h.pt']
         else:
-            return ['proc_tr_h.pt', 'proc_val_h.pt', 'proc_test_h.pt']
+            return ['proc_tr.pt', 'proc_val.pt', 'proc_test.pt']
     def download(self):
         # 添加对药效团匹配评分以及SA， QED的计算
         # first select the best pharmacophore model
@@ -246,11 +246,9 @@ class CSDDataset(InMemoryDataset):
 
     def process(self):
         RDLogger.DisableLog('rdApp.*')
-        types =  {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'P': 5, 
-                                'S': 6, 'Cl': 7, 'Br': 8, 'I': 9}
+        types =  {'C': 0, 'N': 1, 'O': 2, 'F': 3, 'P': 4, 
+                                'S': 5, 'Cl': 6, 'Br': 7, 'I': 8, 'H': 9}
         bonds = {BT.SINGLE: 0, BT.DOUBLE: 1, BT.TRIPLE: 2, BT.AROMATIC: 3}
-        charge_dict = {'H': 1,'C': 6, 'N': 7, 'O': 8, 'F': 9, 'P': 15, 
-                        'S': 16, 'Cl': 17, 'Br': 35, 'I': 53}
         target_df = pd.read_csv(self.split_paths[self.file_idx], index_col=0)
         with open(self.raw_paths[1], 'r') as f:
             target = f.read().split('\n')[1:-1]
@@ -285,7 +283,7 @@ class CSDDataset(InMemoryDataset):
                     check = False
                     break
                 type_idx.append(types[atom_str])
-                charges.append(charge_dict[atom_str])
+                # charges.append(charge_dict[atom_str])
                 formal_charges.append(atom.GetFormalCharge())
             if check == False:
                 continue
@@ -314,7 +312,6 @@ class CSDDataset(InMemoryDataset):
 
             x = F.one_hot(torch.tensor(type_idx), num_classes=len(types)).float()
             atom_type = torch.tensor(type_idx)
-            charges = torch.tensor(charges)
             # y = torch.zeros((1, 0), dtype=torch.float)
             y = target[i].unsqueeze(0)
 
@@ -328,10 +325,9 @@ class CSDDataset(InMemoryDataset):
                 # Shift onehot encoding to match atom decoder
                 x = x[:, 1:]
                 atom_type = atom_type[to_keep] 
-                charges = charges[to_keep]
 
             data = Data(x=x, atom_type=atom_type, edge_index=edge_index, edge_attr=edge_attr,
-                        y=y, idx=i, pos=posc, charge=charges, fc=torch.tensor(formal_charges),
+                        y=y, idx=i, pos=posc, fc=torch.tensor(formal_charges),
                         rdmol=copy.deepcopy(mol))
 
             if self.pre_filter is not None and not self.pre_filter(data):
@@ -388,9 +384,9 @@ class CSDDataModule(MolecularDataModule):
         base_path = pathlib.Path(os.path.realpath(__file__)).parents[2]
         root_path = os.path.join(base_path, self.datadir)
         datasets = {'train': CSDDataset(stage='train', root=root_path,remove_h = self.remove_h, prop2idx=prop2idx,
-                                        transform=RemoveYTransform),
+                                        transform=RemoveYTransform()),
                     'val': CSDDataset(stage='val', root=root_path, remove_h = self.remove_h, prop2idx=prop2idx,
-                                      transform=RemoveYTransform),
+                                      transform=RemoveYTransform()),
                     'test': CSDDataset(stage='test', root=root_path, remove_h = self.remove_h, prop2idx=prop2idx,
                                        transform=transform)}
         super().__init__(cfg, datasets)
@@ -414,7 +410,7 @@ class CSDinfos(AbstractDatasetInfos):
             self.max_weight = 500
             self.atom_weights = {0: 12, 1: 14, 2: 16, 3: 19, 4:31, 5:32, 6:35, 7:80, 
                                 8:127}
-            self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+            self.prop2idx = {'glp1_score':0,'cav32_score':1,'hpk1_score':2,'lrrk2_score':3,'pharma_score':4,'SA':5,'QED':6,'acute_tox':7}
             self.n_nodes = None
             self.node_types = None
             self.edge_types = None
@@ -422,27 +418,27 @@ class CSDinfos(AbstractDatasetInfos):
             # self.valency_distribution[:9] = torch.tensor([0.0000e+00, 1.3238e-01, 2.0985e-01, 3.8483e-01, 2.6112e-01, 7.4222e-03,
             #                                             4.3973e-03, 0.0000e+00, 2.3065e-06])
         else:
-            self.atom_index = {1: 0, 6: 1, 7: 2, 8: 3, 9:4, 15:5, 16:6, 17:7,
-                            35:8, 53:9}
-            self.atom_encoder = {'H': 0, 'C': 1, 'N': 2, 'O': 3, 'F': 4, 'P': 5, 
-                                'S': 6, 'Cl': 7, 'Br': 8, 'I': 9}
-            self.atom_decoder = ['H', 'C', 'N', 'O', 'F', 'P', 
-                                'S', 'Cl', 'Br', 'I']
-            self.valencies = [1, 4, 3, 2, 1, 3, 2, 1, 1, 1]
+            self.atom_index = {6: 0, 7: 1, 8: 2, 9:3, 15:4, 16:5, 17:6,
+                            35:7, 53:8, 1:9}
+            self.atom_encoder = {'C': 0, 'N': 1, 'O': 2, 'F': 3, 'P':4, 
+                                'S': 5, 'Cl': 6, 'Br': 7, 'I': 8, 'H':9}
+            self.atom_decoder = ['C', 'N', 'O', 'F', 'P', 
+                                'S', 'Cl', 'Br', 'I', 'H']
+            self.valencies = [4, 3, 2, 1, 3, 2, 1, 1, 1, 1]
             self.num_atom_types = len(self.atom_decoder)
             self.max_n_nodes = 48
             self.max_weight = 500
-            self.atom_weights = {0: 1, 1: 12, 2: 14, 3: 16, 4: 19, 5:31, 6:32, 7:35, 8:80, 
-                                9:127}
-            self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+            self.atom_weights = {0: 12, 1: 14, 2: 16, 3: 19, 4:31, 5:32, 6:35, 7:80, 
+                                8:127, 9: 1}
+            self.prop2idx = {'glp1_score':0,'cav32_score':1,'hpk1_score':2,'lrrk2_score':3,'pharma_score':4,'SA':5,'QED':6,'acute_tox':7}
             self.n_nodes = torch.tensor([0.0000, 0.0000, 0.0001, 0.0004, 0.0009, 0.0012, 0.0022, 0.0026, 0.0057,
                                         0.0070, 0.0128, 0.0135, 0.0197, 0.0189, 0.0279, 0.0283, 0.0395, 0.0408,
                                         0.0531, 0.0490, 0.0555, 0.0492, 0.0564, 0.0480, 0.0534, 0.0442, 0.0460,
                                         0.0354, 0.0383, 0.0285, 0.0328, 0.0225, 0.0257, 0.0177, 0.0211, 0.0132,
                                         0.0165, 0.0097, 0.0115, 0.0069, 0.0094, 0.0055, 0.0074, 0.0036, 0.0055,
                                         0.0027, 0.0042, 0.0020, 0.0037])
-            self.node_types = torch.tensor([3.7325e-04, 7.8441e-01, 5.5899e-02, 1.1707e-01, 1.1227e-02, 3.1953e-03,
-                                            1.4546e-02, 7.6903e-03, 4.6092e-03, 9.7929e-04])
+            self.node_types = torch.tensor([7.8441e-01, 5.5899e-02, 1.1707e-01, 1.1227e-02, 3.1953e-03, 1.4546e-02,
+        7.6903e-03, 4.6092e-03, 9.7929e-04, 3.7325e-04])
             self.edge_types = torch.tensor([9.1415e-01, 4.4567e-02, 6.8226e-03, 4.0956e-04, 3.4053e-02])
             self.valency_distribution = torch.zeros(self.max_n_nodes * 3 - 2)
             self.valency_distribution[:7] = torch.tensor([0.0000, 0.1270, 0.2255, 0.3855, 0.2524, 0.0053, 0.0043])

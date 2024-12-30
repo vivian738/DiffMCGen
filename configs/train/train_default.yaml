@@ -1,6 +1,6 @@
 # Training settings
 n_epochs: 200
-batch_size: 512  # qm9:1024, csd: 64 moses:256
+batch_size: 64  # qm9:1024, csd: 64 moses:256
 lr: 2e-4 #csd, moses: 2e-4 qm9:0.0002
 clip_grad: null          # float, null to disable
 save_model: True

@@ -395,8 +395,8 @@ class LEFTNet(torch.nn.Module):
             self.FTEs.append(FTE(self.hidden_channels))
 
         # self.last_layer = nn.Linear(self.hidden_channels, 1)
-        self.mlp_in_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
-        self.mlp_out_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
+        # self.mlp_in_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
+        # self.mlp_out_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
         if self.pos_require_grad:
             self.out_forces = EquiOutput(self.hidden_channels)
         
@@ -424,13 +424,13 @@ class LEFTNet(torch.nn.Module):
                 layer.reset_parameters()
     
 
-    def forward(self, z, node_mask, noise_pos, batch, context, time_step):
-        pos_perturbed = self.mlp_in_pos(noise_pos, node_mask)[node_mask]
+    def forward(self, z, node_mask, pos_perturbed, batch, context, time_step):
+        # pos_perturbed = self.mlp_in_pos(noise_pos, node_mask)[node_mask]
 
-        z = z[node_mask].long()
+        # z = z[node_mask].long()
         # time_step = time_step / self.T
-        time_emb = time_step.index_select(0, batch).squeeze(1)
-        time_emb = get_timestep_embedding(time_emb, self.hidden_channels)
+        time_emb = time_step.index_select(0, batch)
+        time_emb = get_timestep_embedding(time_emb, self.hidden_channels)  #batch, hidden_channels
         # embed z
         if context is None:
             temb=time_emb
@@ -536,7 +536,7 @@ class LEFTNet(torch.nn.Module):
         # h = h * self.y_std + self.y_mean
         # dpos_gt= pos_perturbed + pos_gt
         pos_gt, _ = to_dense_batch(x=pos_gt, batch=batch)
-        pos_gt = self.mlp_out_pos(pos_gt, node_mask)
+        # pos_gt = self.mlp_out_pos(pos_gt, node_mask)
         
         pos = pos_gt * node_mask.unsqueeze(-1)  #(bs, n, 3)
     

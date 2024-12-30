@@ -20,6 +20,8 @@ from PIL import ImageDraw, Image
 from rdkit.Chem import PyMol
 from PIL import ImageFile
 
+from src.analysis.rdkit_functions import build_xae_molecule
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 allowed_bonds = {'H': {0: 1, 1: 0, -1: 0},
                  'C': {0: [3, 4], 1: 3, -1: 3},
@@ -80,40 +82,30 @@ class MolecularVisualization:
 
         try:
             mol = mol.GetMol()
+            AllChem.EmbedMolecule(mol, useRandomCoords=True)
+            AllChem.MMFFOptimizeMolecule(mol)
         except rdkit.Chem.KekulizeException:
             print("Can't kekulize molecule")
             mol = None
         
-        if positions is not None:
-            if np.isnan(np.array(positions)).any():  #直接扔掉
-                return mol
-            else:
-                conf = Chem.Conformer(mol.GetNumAtoms())   #可能顺序不一样
-                for i in range(mol.GetNumAtoms()):
-                    conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
-                mol.AddConformer(conf)
-                # for i, p in enumerate(positions):
-                #     if i in node_to_idx:
-                #         molIdx = node_to_idx[i]
-                #         conf.SetAtomPosition(molIdx, Point3D(p[0].item(), p[1].item(), p[2].item()))
-                #     else:
-                #         continue
-                # mol.AddConformer(conf)
-        # ring_info = mol.GetRingInfo()
-        # atom_rings = ring_info.AtomRings()  
-        
-        # large_rings = [ring for ring in atom_rings if len(ring) > max_ring_size]
-        # if not large_rings:
-        #     return mol  
-    
-        # # 复制分子以避免修改原分子
-        # mol_edit = Chem.RWMol(mol)
-        
-        # for ring in large_rings:
-        #     # 打断大环中的一个键
-        #     mol_edit.RemoveBond(ring[0], ring[1])
+        if positions is not None and np.isnan(np.array(positions)).any()==False:
+            X, A, E = build_xae_molecule(positions, node_list, self.dataset_infos)
+            mol_3 = Chem.RWMol()
+            for atom in X:
+                a = Chem.Atom(atom_decoder[atom.item()])
+                mol_3.AddAtom(a)
 
-        return mol
+            all_bonds = torch.nonzero(A)
+            for bond in all_bonds:
+                mol_3.AddBond(bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()])
+            conf = Chem.Conformer(mol_3.GetNumAtoms())   #可能顺序不一样
+            for i in range(mol_3.GetNumAtoms()):
+                conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
+            mol_3.AddConformer(conf)
+        else:
+            mol_3 = None
+
+        return mol, mol_3
 
     def visualize(self, path: str, molecules: list, num_molecules_to_visualize: int, log='graph', conformer2d=None,
                   file_prefix='molecule'): #conformer_list: list, 
@@ -127,79 +119,20 @@ class MolecularVisualization:
         
         for i in range(num_molecules_to_visualize):
             file_path = os.path.join(path, 'molecule_{}.png'.format(i))
-            mol = self.mol_from_graphs(molecules[i][0].numpy(), molecules[i][1].numpy(), molecules[i][2].numpy())
-            if mol is not None:
-                molecules[i].append(mol)
-                self.plot_save_molecule(molecules[i], save_path=file_path, conformer2d=conformer2d)
+            mol_2, mol_3 = self.mol_from_graphs(molecules[i][0].numpy(), molecules[i][1].numpy(), molecules[i][2].numpy())
+            if mol_2 is not None:
+                self.plot_save_molecule(molecules[i], mol_2, save_path=file_path, conformer2d=conformer2d)
+            elif mol_3 is not None:
+                self.plot_save_molecule(molecules[i], mol_3, save_path=file_path, conformer2d=conformer2d)
 
                 if log is not None and wandb.run:
                     wandb.log({log: wandb.Image(file_path)}, commit=True)
         
-
-
-
-    def visualize_chain(self, path, nodes_list, adjacency_matrix, positions, trainer=None):
-        RDLogger.DisableLog('rdApp.*')
-        # convert graphs to the rdkit molecules
-        # pca = PCA(n_components=3)
-        # if positions[-1].shape[0] > 2:
-        #     pca.fit(positions[-1])
-        # mols = []
-        # for i in range(nodes_list.shape[0]):
-            # pos = pca.transform(positions[i]) if positions[-1].shape[0] > 2 else positions[i].numpy()
-
-            # mols.append(self.mol_from_graphs(nodes_list[i], adjacency_matrix[i], torch.from_numpy(pos).to(nodes_list.device)))
-        mols = [self.mol_from_graphs(nodes_list[i], adjacency_matrix[i], positions[i]) for i in range(nodes_list.shape[0])]
-        
-        # find the coordinates of atoms in the final molecule
-        final_molecule = mols[-1]
-        AllChem.Compute2DCoords(final_molecule)
-        
-        coords = []
-        conf = final_molecule.GetConformer()
-        for k, atom in enumerate(final_molecule.GetAtoms()):
-            p = conf.GetAtomPosition(k)
-            coords.append([p.x, p.y, p.z])
-        # conformer2d = torch.Tensor(coords)
-        
-        # align all the molecules
-        for l, mol in enumerate(mols):
-            AllChem.Compute2DCoords(mol)
-            conf = mol.GetConformer()
-            for j, atom in enumerate(mol.GetAtoms()):
-                x, y, z = coords[j]
-                conf.SetAtomPosition(j, Point3D(x, y, z))
-
-        # draw gif
-        save_paths = []
-        num_frams = nodes_list.shape[0]
-
-        for frame in range(num_frams):
-            file_name = os.path.join(path, 'fram_{}.png'.format(frame))
-            Draw.MolToFile(mols[frame], file_name, size=(300, 300), legend=f"Frame {frame}")
-            save_paths.append(file_name)
-
-        imgs = [imageio.imread(fn) for fn in save_paths]
-        gif_path = os.path.join(os.path.dirname(path), '{}.gif'.format(path.split('/')[-1]))
-        imgs.extend([imgs[-1]] * 10)
-        imageio.mimsave(gif_path, imgs, subrectangles=True, duration=20)
-
-        if wandb.run:
-            print(f"Saving {gif_path} to wandb")
-            wandb.log({"chain": wandb.Video(gif_path, fps=5, format="gif")}, commit=True)
-
-        # draw grid image
-        try:
-            img = Draw.MolsToGridImage(mols, molsPerRow=10, subImgSize=(200, 200))
-            img.save(os.path.join(path, '{}_grid_image.png'.format(path.split('/')[-1])))
-        except Chem.rdchem.KekulizeException:
-            print("Can't kekulize molecule")
-        return mols
     
-    def plot_save_molecule(self, mol, save_path, conformer2d=None):
+    def plot_save_molecule(self, graph_list, mol, save_path, conformer2d=None):
         buffer = io.BytesIO()
         new_im = PIL.Image.new('RGB', (600, 300), color='white')
-        pil3d, max_dist = self.generatePIL3d(mol, buffer)
+        pil3d, max_dist = self.generatePIL3d(graph_list, buffer)
         pil3d = pil3d.resize((300, 300))
         new_im.paste(pil3d, (300, 0, 600, 300))
         # f_3d = []
@@ -213,7 +146,7 @@ class MolecularVisualization:
         # new_im.paste(f_3d[3], (300, 300, 600, 600))
         # new_im.paste(f_3d[4], (600, 300, 900, 600))
         try:
-            pil2d = self.generatePIL2d(mol[-1], conformer2d)
+            pil2d = self.generatePIL2d(mol, conformer2d)
             new_im.paste(pil2d, (0, 0, 300, 300))
         except ValueError:
             print("Value error in generate PIL2D. The ")

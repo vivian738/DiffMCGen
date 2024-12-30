@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import re
 import wandb
+from rdkit.Geometry import Point3D
 try:
     from rdkit import Chem
     print("Found rdkit, all good")
@@ -17,6 +18,49 @@ allowed_bonds = {'H': 1, 'C': 4, 'N': 3, 'O': 2, 'F': 1, 'B': 3, 'Al': 3, 'Si': 
 bond_dict = [None, Chem.rdchem.BondType.SINGLE, Chem.rdchem.BondType.DOUBLE, Chem.rdchem.BondType.TRIPLE,
                  Chem.rdchem.BondType.AROMATIC]
 ATOM_VALENCY = {6: 4, 7: 3, 8: 2, 9: 1, 15: 3, 16: 2, 17: 1, 35: 1, 53: 1}
+bonds1 = {'H': {'H': 74, 'C': 109, 'N': 101, 'O': 96, 'F': 92,
+                'B': 119, 'Si': 148, 'P': 144, 'As': 152, 'S': 134,
+                'Cl': 127, 'Br': 141, 'I': 161},
+          'C': {'H': 109, 'C': 154, 'N': 147, 'O': 143, 'F': 135,
+                'Si': 185, 'P': 184, 'S': 182, 'Cl': 177, 'Br': 194,
+                'I': 214},
+          'N': {'H': 101, 'C': 147, 'N': 145, 'O': 140, 'F': 136,
+                'Cl': 175, 'Br': 214, 'S': 168, 'I': 222, 'P': 177},
+          'O': {'H': 96, 'C': 143, 'N': 140, 'O': 148, 'F': 142,
+                'Br': 172, 'S': 151, 'P': 163, 'Si': 163, 'Cl': 164,
+                'I': 194},
+          'F': {'H': 92, 'C': 135, 'N': 136, 'O': 142, 'F': 142,
+                'S': 158, 'Si': 160, 'Cl': 166, 'Br': 178, 'P': 156,
+                'I': 187},
+          'B': {'H': 119, 'Cl': 175},
+          'Si': {'Si': 233, 'H': 148, 'C': 185, 'O': 163, 'S': 200,
+                 'F': 160, 'Cl': 202, 'Br': 215, 'I': 243},
+          'Cl': {'Cl': 199, 'H': 127, 'C': 177, 'N': 175, 'O': 164,
+                 'P': 203, 'S': 207, 'B': 175, 'Si': 202, 'F': 166,
+                 'Br': 214},
+          'S': {'H': 134, 'C': 182, 'N': 168, 'O': 151, 'S': 204,
+                'F': 158, 'Cl': 207, 'Br': 225, 'Si': 200, 'P': 210,
+                'I': 234},
+          'Br': {'Br': 228, 'H': 141, 'C': 194, 'O': 172, 'N': 214,
+                 'Si': 215, 'S': 225, 'F': 178, 'Cl': 214, 'P': 222},
+          'P': {'P': 221, 'H': 144, 'C': 184, 'O': 163, 'Cl': 203,
+                'S': 210, 'F': 156, 'N': 177, 'Br': 222},
+          'I': {'H': 161, 'C': 214, 'Si': 243, 'N': 222, 'O': 194,
+                'S': 234, 'F': 187, 'I': 266},
+          'As': {'H': 152}
+          }
+
+bonds2 = {'C': {'C': 134, 'N': 129, 'O': 120, 'S': 160},
+          'N': {'C': 129, 'N': 125, 'O': 121},
+          'O': {'C': 120, 'N': 121, 'O': 121, 'P': 150},
+          'P': {'O': 150, 'S': 186},
+          'S': {'P': 186}}
+
+bonds3 = {'C': {'C': 120, 'N': 116, 'O': 113},
+          'N': {'C': 116, 'N': 110},
+          'O': {'C': 113}}
+
+margin1, margin2, margin3 = 5, 2, 1
 
 
 class BasicMolecularMetrics(object):
@@ -33,18 +77,21 @@ class BasicMolecularMetrics(object):
         num_components = []
         all_smiles = []
         for graph in generated:
-            atom_types, edge_types = graph
-            mol = build_molecule(atom_types, edge_types, self.dataset_info.atom_decoder)
-            smiles = mol2smiles(mol)
+            atom_types, edge_types, positions = graph
+            mol_2, mol_3 = build_molecule(atom_types, edge_types, positions, self.dataset_info.atom_decoder, self.dataset_info)
+            smiles_2 = mol2smiles(mol_2)
+            smiles_3 = mol2smiles(mol_3)
             try:
-                mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
-                num_components.append(len(mol_frags))
+                mol_frags_2 = Chem.rdmolops.GetMolFrags(mol_2, asMols=True, sanitizeFrags=True)
+                num_components.append(len(mol_frags_2))
+                mol_frags_3 = Chem.rdmolops.GetMolFrags(mol_3, asMols=True, sanitizeFrags=True)
+                num_components.append(len(mol_frags_3))
             except:
                 pass
-            if smiles is not None:
+            if smiles_2 is not None:
                 try:
-                    mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
-                    largest_mol = max(mol_frags, default=mol, key=lambda m: m.GetNumAtoms())
+                    mol_frags = Chem.rdmolops.GetMolFrags(mol_2, asMols=True, sanitizeFrags=True)
+                    largest_mol = max(mol_frags, default=mol_2, key=lambda m: m.GetNumAtoms())
                     smiles = mol2smiles(largest_mol)
                     valid.append(smiles)
                     all_smiles.append(smiles)
@@ -55,7 +102,21 @@ class BasicMolecularMetrics(object):
                     print("Can't kekulize molecule")
                     all_smiles.append(None)
             else:
-                all_smiles.append(None)
+                if smiles_3 is not None:
+                    try:
+                        mol_frags = Chem.rdmolops.GetMolFrags(mol_3, asMols=True, sanitizeFrags=True)
+                        largest_mol = max(mol_frags, default=mol_3, key=lambda m: m.GetNumAtoms())
+                        smiles = mol2smiles(largest_mol)
+                        valid.append(smiles)
+                        all_smiles.append(smiles)
+                    except Chem.rdchem.AtomValenceException:
+                        print("Valence error in GetmolFrags")
+                        all_smiles.append(None)
+                    except Chem.rdchem.KekulizeException:
+                        print("Can't kekulize molecule")
+                        all_smiles.append(None)
+                else:
+                    all_smiles.append(None)
 
         return valid, len(valid) / len(generated), np.array(num_components), all_smiles
 
@@ -78,7 +139,7 @@ class BasicMolecularMetrics(object):
     def compute_relaxed_validity(self, generated):
         valid = []
         for graph in generated:
-            atom_types, edge_types = graph
+            atom_types, edge_types, positions = graph
             mol = build_molecule_with_partial_charges(atom_types, edge_types, self.dataset_info.atom_decoder)
             smiles = mol2smiles(mol)
             if smiles is not None:
@@ -130,7 +191,7 @@ def mol2smiles(mol):
     return Chem.MolToSmiles(mol)
 
 
-def build_molecule(atom_types, edge_types, atom_decoder, verbose=False):
+def build_molecule(atom_types, edge_types, positions, atom_decoder, dataset_infos, verbose=False):
     if verbose:
         print("building new molecule")
 
@@ -149,7 +210,23 @@ def build_molecule(atom_types, edge_types, atom_decoder, verbose=False):
             if verbose:
                 print("bond added:", bond[0].item(), bond[1].item(), edge_types[bond[0], bond[1]].item(),
                       bond_dict[edge_types[bond[0], bond[1]].item()] )
-    return mol
+    if positions is not None and np.isnan(np.array(positions)).any()==False:
+        X, A, E = build_xae_molecule(positions, atom_types, dataset_infos)
+        mol_3 = Chem.RWMol()
+        for atom in X:
+            a = Chem.Atom(atom_decoder[atom.item()])
+            mol_3.AddAtom(a)
+
+        all_bonds = torch.nonzero(A)
+        for bond in all_bonds:
+            mol_3.AddBond(bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()])
+        conf = Chem.Conformer(mol_3.GetNumAtoms())   #可能顺序不一样
+        for i in range(mol_3.GetNumAtoms()):
+            conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
+        mol_3.AddConformer(conf)
+    else:
+        mol_3 = None
+    return mol, mol_3
 
 
 def build_molecule_with_partial_charges(atom_types, edge_types, atom_decoder, verbose=False):
@@ -304,7 +381,7 @@ def compute_molecular_metrics(molecule_list, train_smiles, dataset_info):
         n_molecules = len(molecule_list)
 
         for i, mol in enumerate(molecule_list):
-            atom_types, edge_types = mol
+            atom_types, edge_types, positions = mol
 
             validity_results = check_stability(atom_types, edge_types, dataset_info)
 
@@ -332,3 +409,65 @@ def compute_molecular_metrics(molecule_list, train_smiles, dataset_info):
         wandb.log(dic)
 
     return validity_dict, rdkit_metrics, all_smiles
+
+
+def build_xae_molecule(positions, atom_types, dataset_info):
+    """ Returns a triplet (X, A, E): atom_types, adjacency matrix, edge_types
+        args:
+        positions: N x 3  (already masked to keep final number nodes)
+        atom_types: N
+        returns:
+        X: N         (int)
+        A: N x N     (bool)                  (binary adjacency matrix)
+        E: N x N     (int)  (bond type, 0 if no bond) such that A = E.bool()
+    """
+    # atom_decoder = dataset_info['atom_decoder']
+    n = positions.shape[0]
+    X = atom_types
+    A = torch.zeros((n, n), dtype=torch.bool)
+    E = torch.zeros((n, n), dtype=torch.int)
+
+    pos = positions.unsqueeze(0)
+    dists = torch.cdist(pos, pos, p=2).squeeze(0)
+    atom_decoder = dataset_info.atom_decoder
+    for i in range(n):
+        for j in range(i):
+            pair = sorted([atom_types[i], atom_types[j]])
+            if dataset_info.name == 'qm9':
+                order = get_bond_order(atom_decoder[pair[0]], atom_decoder[pair[1]], dists[i, j])
+            elif dataset_info.name == 'csd' or dataset_info.name == 'moses':
+                order = get_bond_order(atom_decoder[pair[0]], atom_decoder[pair[1]], dists[i, j], check_exists=True)
+
+            # TODO: a batched version of get_bond_order to avoid the for loop
+            if order > 0:
+                # Warning: the graph should be DIRECTED
+                A[i, j] = 1
+                E[i, j] = order
+    return X, A, E
+
+def get_bond_order(atom1, atom2, distance, check_exists=False):
+    distance = 100 * distance  # We change the metric
+
+    # Check exists for large molecules where some atom pairs do not have a
+    # typical bond length.
+    if check_exists:
+        if atom1 not in bonds1:
+            return 0
+        if atom2 not in bonds1[atom1]:
+            return 0
+
+    # margin1, margin2 and margin3 have been tuned to maximize the stability of
+    # the QM9 true samples.
+    if distance < bonds1[atom1][atom2] + margin1:
+
+        # Check if atoms in bonds2 dictionary.
+        if atom1 in bonds2 and atom2 in bonds2[atom1]:
+            thr_bond2 = bonds2[atom1][atom2] + margin2
+            if distance < thr_bond2:
+                if atom1 in bonds3 and atom2 in bonds3[atom1]:
+                    thr_bond3 = bonds3[atom1][atom2] + margin3
+                    if distance < thr_bond3:
+                        return 3  # Triple
+                return 2  # Double
+        return 1  # Single
+    return 0  # No bond

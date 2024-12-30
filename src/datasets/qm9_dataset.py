@@ -458,7 +458,8 @@ class QM9infos(AbstractDatasetInfos):
     def __init__(self, datamodule, cfg, recompute_statistics=False):
         self.remove_h = cfg.dataset.remove_h
         self.need_to_strip = False        # to indicate whether we need to ignore one output from the model
-        self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+        self.prop2idx = {'mu': 0, 'alpha': 1, 'homo': 2, 'lumo': 3, 'gap': 4, 'Cv': 11, 'pharma_score': 16, 'SA': 17,
+                    'QED': 18}
         self.name = 'qm9'
         if self.remove_h:
             self.atom_index = {6: 0, 7: 1, 8: 2, 9: 3}

@@ -156,7 +156,9 @@ def prepare_context(conditioning, minibatch, property_norms):
     context_list = []
     # for i, key in enumerate(conditioning):
     key=conditioning[0]
+
     properties = minibatch.y[..., 0]
+
     properties = (properties - property_norms[key]['mean']) / property_norms[key]['mad']
     if len(properties.size()) == 1:
         # Global feature.

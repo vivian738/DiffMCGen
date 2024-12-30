@@ -108,7 +108,7 @@ class DCMHAttention(nn.Module):
         
         # DCMHA
         self.query_input_dim = dx
-        self.num_groups = 2
+        self.num_groups = 1
         self.num_heads_per_group = self.n_head // self.num_groups
         self.dynamic_w_hidden_dim = self.n_head*4
         self.dynamic_hidden_dim =  self.num_heads_per_group // (self.n_head//2)

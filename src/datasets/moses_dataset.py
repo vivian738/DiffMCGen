@@ -246,7 +246,6 @@ class MOSESDataset(InMemoryDataset):
 
     def process(self):
         RDLogger.DisableLog('rdApp.*')
-        charge_dict = {'H': 1, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'S': 16, 'Cl': 17, 'Br': 35}
 
         types = {atom: i for i, atom in enumerate(atom_decoder)}
 
@@ -426,7 +425,7 @@ class MOSESinfos(AbstractDatasetInfos):
         self.input_dims = None
         self.output_dims = None
         self.remove_h = False
-        self.prop2idx = {value: index for index, value in enumerate(getattr(cfg.model, 'context'))}
+        self.prop2idx = {'pharma_score':0,'SA':1,'QED':2,'acute_tox':3,'glp1_score':4,'cav32_score':5,'hpk1_score':6,'lrrk2_score':7}
 
 
         self.atom_decoder = atom_decoder
