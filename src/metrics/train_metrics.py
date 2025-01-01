@@ -201,7 +201,7 @@ class LEFTLossDiscrete(nn.Module):
     def forward(self, net_out, pos_t, pos, node_mask, log:bool):
         node_gt, pos_gt = net_out
         pos_noise = pos_t - pos
-        loss_pos = self.loss_pos(pos_gt[node_mask], pos_noise[node_mask])
+        loss_pos = self.loss_pos(pos_gt[node_mask], pos_noise)
         
         # loss_cond = self.loss_cond(node_gt[node_mask], atom_noise[node_mask])
         loss = 5 * loss_pos

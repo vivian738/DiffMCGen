@@ -88,7 +88,7 @@ class SamplingMolecularMetrics(nn.Module):
         self.dataset_info = di
 
     def forward(self, molecules: list, name, current_epoch, val_counter, local_rank, test=False):
-        stability, rdkit_metrics, all_smiles, molecules_new = compute_molecular_metrics(molecules, self.train_smiles, self.dataset_info)
+        stability, rdkit_metrics, all_smiles = compute_molecular_metrics(molecules, self.train_smiles, self.dataset_info)
 
         if test and local_rank == 0:
             with open(r'final_smiles.txt', 'w') as fp:
@@ -98,19 +98,19 @@ class SamplingMolecularMetrics(nn.Module):
                 print('All smiles saved')
 
         print("Starting custom metrics")
-        self.generated_n_dist(molecules_new)
+        self.generated_n_dist(molecules)
         generated_n_dist = self.generated_n_dist.compute()
         self.n_dist_mae(generated_n_dist)
 
-        self.generated_node_dist(molecules_new)
+        self.generated_node_dist(molecules)
         generated_node_dist = self.generated_node_dist.compute()
         self.node_dist_mae(generated_node_dist)
 
-        self.generated_edge_dist(molecules_new)
+        self.generated_edge_dist(molecules)
         generated_edge_dist = self.generated_edge_dist.compute()
         self.edge_dist_mae(generated_edge_dist)
 
-        self.generated_valency_dist(molecules_new)
+        self.generated_valency_dist(molecules)
         generated_valency_dist = self.generated_valency_dist.compute()
         self.valency_dist_mae(generated_valency_dist)
 

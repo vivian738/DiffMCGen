@@ -631,9 +631,9 @@ class DiscreteDenoisingDiffusion(pl.LightningModule):
         else:
             node_gt, pos_gt = net_out
             pos_noise = pos_t - pos
-            loss_pos = self.val_pos_mse(pos_gt[node_mask], pos_noise[node_mask])
+            loss_pos = self.val_pos_mse(pos_gt[node_mask], pos_noise)
             # loss_cond = self.val_cond(node_gt[node_mask], atom_noise[node_mask])
-            loss_wasser = self.val_pos_wasser((pos_t - pos_gt)[node_mask], pos[node_mask], node_mask)
+            loss_wasser = self.val_pos_wasser((pos_t - pos_gt[node_mask]), pos, node_mask)
             nlls = loss_pos + loss_wasser
 
         # Update NLL metric object and return batch nll
