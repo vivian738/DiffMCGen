@@ -212,18 +212,21 @@ def build_molecule(atom_types, edge_types, positions, atom_decoder, dataset_info
                       bond_dict[edge_types[bond[0], bond[1]].item()] )
     if positions is not None and np.isnan(np.array(positions)).any()==False:
         X, A, E = build_xae_molecule(positions, atom_types, dataset_infos)
-        mol_3 = Chem.RWMol()
-        for atom in X:
-            a = Chem.Atom(atom_decoder[atom.item()])
-            mol_3.AddAtom(a)
+        if A is None:
+            mol_3=None
+        else:
+            mol_3 = Chem.RWMol()
+            for atom in X:
+                a = Chem.Atom(atom_decoder[atom.item()])
+                mol_3.AddAtom(a)
 
-        all_bonds = torch.nonzero(A)
-        for bond in all_bonds:
-            mol_3.AddBond(bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()])
-        conf = Chem.Conformer(mol_3.GetNumAtoms())   #可能顺序不一样
-        for i in range(mol_3.GetNumAtoms()):
-            conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
-        mol_3.AddConformer(conf)
+            all_bonds = torch.nonzero(A)
+            for bond in all_bonds:
+                mol_3.AddBond(bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()])
+            conf = Chem.Conformer(mol_3.GetNumAtoms())   #可能顺序不一样
+            for i in range(mol_3.GetNumAtoms()):
+                conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
+            mol_3.AddConformer(conf)
     else:
         mol_3 = None
     return mol, mol_3

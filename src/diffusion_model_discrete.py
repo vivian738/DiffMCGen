@@ -239,7 +239,7 @@ class DiscreteDenoisingDiffusion(pl.LightningModule):
                    f" -- E_CE: {trans_to_log['train_epoch/E_CE'] :.3f} --"
                    f" y_CE: {trans_to_log['train_epoch/y_CE'] :.3f} --"
                    f" pos_loss: {pos_to_log['train_epoch/pos_loss'] :.3f} --"
-                   f" cond_loss: {pos_to_log['train_epoch/cond_loss'] :.3f} --"
+                #    f" cond_loss: {pos_to_log['train_epoch/cond_loss'] :.3f} --"
                    f" -- {time.time() - self.start_epoch_time:.1f}s ")
         epoch_at_metrics, epoch_bond_metrics = self.train_metrics.log_epoch_metrics()
         self.print(f"Epoch {self.current_epoch}: {epoch_at_metrics} -- {epoch_bond_metrics}")
@@ -674,10 +674,10 @@ class DiscreteDenoisingDiffusion(pl.LightningModule):
         if num_nodes is None:
             n_nodes = self.node_dist.sample_n(batch_size, self.device)
             if self.prop_dist is not None:
-                key_list = list(self.prop_dist.distributions.keys())
+                key_list = list(list(self.prop_dist.distributions.values())[0].keys())
                 # #qm9
-                mask = torch.tensor([node not in key_list for node in n_nodes], dtype=torch.bool, device=n_nodes.device)
-                n_nodes = torch.where(mask, torch.tensor(torch.max(n_nodes).item()), n_nodes)
+                mask = torch.tensor([node in key_list for node in n_nodes], dtype=torch.bool, device=n_nodes.device)
+                n_nodes = torch.where(mask, n_nodes, torch.tensor(torch.max(n_nodes).item()))
         elif type(num_nodes) == int:
             n_nodes = num_nodes * torch.ones(batch_size, device=self.device, dtype=torch.int)
         else:
@@ -694,7 +694,7 @@ class DiscreteDenoisingDiffusion(pl.LightningModule):
         assert (E == torch.transpose(E, 1, 2)).all()
         batch = ex_batch(node_mask)
         pos_init = torch.randn(X.size(0), n_max, 3, device=X.device)
-        pos_init = pos_init * node_mask.unsqueeze(-1)[node_mask]
+        pos_init = (pos_init * node_mask.unsqueeze(-1))[node_mask]
         pos = center_pos(pos_init, batch)
 
         if self.prop_dist is not None:
@@ -718,13 +718,14 @@ class DiscreteDenoisingDiffusion(pl.LightningModule):
         # Sample
         sampled_s = sampled_s.mask(node_mask, collapse=True)
         X, E, y = sampled_s.X, sampled_s.E, sampled_s.y
+        pos, _ = to_dense_batch(pos, batch)
 
         molecule_list = []
         for i in range(batch_size):
             n = n_nodes[i]
             atom_types = X[i, :n].cpu()
             edge_types = E[i, :n, :n].cpu()
-            positions = pos[i, :n].cpu()
+            positions = pos[i, :n, :n].cpu()
             molecule_list.append([atom_types, edge_types, positions])
 
         # Visualize
@@ -800,24 +801,19 @@ class DiscreteDenoisingDiffusion(pl.LightningModule):
 
         out_one_hot = utils.PlaceHolder(X=X_s, E=E_s, y=torch.zeros(y_t.shape[0], 0))
 
-        def compute_alpha(beta, t):
-            beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
-            a = (1 - beta).cumprod(dim=0).index_select(0, t + 1)  # .view(-1, 1, 1, 1)
-            return a
-
-        at = compute_alpha(beta_t, t.long())
-        next_t = (torch.ones(1) * (s*self.T)).to(pos.device)
-        noise = center_pos(torch.randn_like(pos) + torch.randn_like(pos), batch)
-        time_step = time_step[0]
-        atm1 = compute_alpha(beta_t, next_t.long())
-        beta_t = 1 - at / atm1
+        noise = center_pos(torch.randn_like(pos) + torch.randn_like(pos), batch)  #batch, 3
         e = -eps_pos
+        alphas = self.noise_schedule.alphas.to(pos.device)
+        alpha_t = alphas[time_step]
+        alpha_s = alphas[(s*self.T).squeeze(1).long()]
+        betas_t = 1 - alpha_t / alpha_s  #bs
+        beta_t_expanded = betas_t.index_select(0, batch)
 
-        mean = (pos - beta_t * e) / (1 - beta_t).sqrt()
-        mask = 1 - (t == 0).float()
-        logvar = beta_t.log()
+        mean = (pos - (betas_t.view(-1, 1, 1) * e)[node_mask]) / (1 - beta_t_expanded).sqrt().unsqueeze(-1)  #(G, 3)
+        mask = 1 - (time_step[0] == 0).float()
+        logvar = beta_t_expanded.log().unsqueeze(-1)  #(G, 1)
         pos_next = mean + mask * torch.exp(
-            0.5 * logvar) * noise  # torch.exp(0.5 * logvar) = σ pos_next = μ+z*σ
+            0.5 * logvar) * noise  # torch.exp(0.5 * logvar) = σ pos_next = μ+z*σ  (G, 3)
 
         return out_one_hot.mask(node_mask).type_as(y_t), pos_next
 
@@ -841,7 +837,7 @@ class DiscreteDenoisingDiffusion(pl.LightningModule):
     def left_process(self, pos, batch, X, betas, node_mask):
         pos, _ = to_dense_batch(x=pos, batch=batch)     
         pos = pos.float() * node_mask.unsqueeze(-1)
-        alphas = (1. - betas).cumprod(dim=0)
+        alphas = (1. - torch.clamp(betas, min=0, max=0.999)).cumprod(dim=0)
         # a = alphas.index_select(0, time_step)  # (G, )
 
         a_pos = alphas.index_select(0, batch)  # (N, 1)

@@ -82,14 +82,15 @@ class MolecularVisualization:
 
         try:
             mol = mol.GetMol()
+            AllChem.Compute2DCoords(mol)
             AllChem.EmbedMolecule(mol, useRandomCoords=True)
             AllChem.MMFFOptimizeMolecule(mol)
-        except rdkit.Chem.KekulizeException:
-            print("Can't kekulize molecule")
+        except Exception as e:
+            print(f"failed: {e}")
             mol = None
         
-        if positions is not None and np.isnan(np.array(positions)).any()==False:
-            X, A, E = build_xae_molecule(positions, node_list, self.dataset_infos)
+        if positions is not None and np.isnan(positions).any()==False:
+            X, A, E = build_xae_molecule(torch.tensor(positions), torch.tensor(node_list), self.dataset_infos)
             mol_3 = Chem.RWMol()
             for atom in X:
                 a = Chem.Atom(atom_decoder[atom.item()])

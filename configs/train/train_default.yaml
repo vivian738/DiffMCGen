@@ -1,6 +1,6 @@
 # Training settings
 n_epochs: 200
-batch_size: 64  # qm9:1024, csd: 64 moses:256
+batch_size: 128  # qm9:1024, csd: 64 moses:256
 lr: 2e-4 #csd, moses: 2e-4 qm9:0.0002
 clip_grad: null          # float, null to disable
 save_model: True
@@ -8,6 +8,6 @@ num_workers: 2
 ema_decay: 0           # 'Amount of EMA decay, 0 means off. A reasonable value  is 0.999.'
 progress_bar: False
 weight_decay: 1e-12
-optimizer: adamw # adamw,nadamw,nadam => nadamw for large batches, see http://arxiv.org/abs/2102.06356 for the use of nesterov momentum with large batches
+optimizer: adam # adamw,nadamw,nadam => nadamw for large batches, see http://arxiv.org/abs/2102.06356 for the use of nesterov momentum with large batches
 seed: 0
  

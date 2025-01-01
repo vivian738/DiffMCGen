@@ -397,6 +397,15 @@ class LEFTNet(torch.nn.Module):
         # self.last_layer = nn.Linear(self.hidden_channels, 1)
         # self.mlp_in_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
         # self.mlp_out_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
+        self.temb = nn.Module()
+        self.temb.dense = nn.ModuleList([
+            torch.nn.Linear(self.hidden_channels,
+                            self.hidden_channels * 4),
+            torch.nn.Linear(self.hidden_channels * 4,
+                            self.hidden_channels * 4),
+        ])
+        self.temb_proj = torch.nn.Linear(self.hidden_channels * 4, self.hidden_channels)
+        self.combined_proj = nn.Linear(3, 1)
         if self.pos_require_grad:
             self.out_forces = EquiOutput(self.hidden_channels)
         
@@ -430,15 +439,21 @@ class LEFTNet(torch.nn.Module):
         # z = z[node_mask].long()
         # time_step = time_step / self.T
         time_emb = time_step.index_select(0, batch)
-        time_emb = get_timestep_embedding(time_emb, self.hidden_channels)  #batch, hidden_channels
+        temb = get_timestep_embedding(time_emb, self.hidden_channels)  #batch, hidden_channels
+        temb = self.temb.dense[0](temb)
+        temb = nn.ReLU()(temb)
+        temb = self.temb.dense[1](temb)
+        temb = self.temb_proj(nn.ReLU()(temb))  # (G, dim)
         # embed z
-        if context is None:
-            temb=time_emb
-        else:
-            ctx = (context - context.min()) / (context.max() - context.min())
-            temb = time_emb + ctx
         z_ = self.z_emb(z) # (N, bs)
-        z_emb = z_ + temb # (N, bs)
+        if context is None:
+            ctx = torch.zeros_like(z.float()).uniform_(-1, +1).unsqueeze(1).unsqueeze(-1)  # G,
+            z_tc = torch.cat([temb.index_select(0, batch).unsqueeze(-1), ctx.expand(-1, 64, -1)], dim=-1)
+        else:
+            ctx = ((context - context.min()) / (context.max() - context.min())).unsqueeze(-1)
+            z_tc = torch.cat([temb.index_select(0, batch).unsqueeze(-1), ctx.expand(-1, 64, -1)], dim=-1)
+        
+        z_emb = self.combined_proj(torch.cat([z_.unsqueeze(-1), z_tc], dim=-1)).squeeze(-1) # (N, bs)
 
         # construct edges based on the cutoff value
         edge_index = radius_graph(pos_perturbed, r=self.cutoff, batch=batch)
