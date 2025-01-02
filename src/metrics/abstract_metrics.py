@@ -107,10 +107,10 @@ class SumExceptBatchWasserstein(Metric):
         self.add_state('total_value', default=torch.tensor(0.), dist_reduce_fx="sum")
         self.add_state('total_samples', default=torch.tensor(0.), dist_reduce_fx="sum")
 
-    def update(self, pred, true, node_mask) -> None:
-        self.total_samples += pred.size(0)
-        pos_pred = pred[node_mask.bool()].view(-1, 3)  # Use masked positions
-        pos_true = true[node_mask.bool()].view(-1, 3)
+    def update(self, pos_pred, pos_true) -> None:
+        self.total_samples += pos_pred.size(0)
+        # pos_pred = pred[node_mask.bool()].view(-1, 3)  # Use masked positions
+        # pos_true = true[node_mask.bool()].view(-1, 3)
         
         # Pairwise distances
         dist_pred = torch.cdist(pos_pred, pos_pred, p=2)  # Predicted pairwise distances
