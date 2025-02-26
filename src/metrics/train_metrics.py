@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 import torch.nn as nn
+from torch_geometric.utils import to_dense_batch
 from torchmetrics import Metric, MeanSquaredError, MetricCollection, MeanAbsoluteError
 import time
 import wandb
@@ -8,6 +9,8 @@ from metrics.abstract_metrics import SumExceptBatchMetric, SumExceptBatchMSE, Su
     HuberLossMetric, NLL
 from torch_scatter import scatter_add
 from diffusion.layers import eq_transform, get_distance, is_train_edge
+
+from src.utils import center_pos
 
 
 class NodeMSE(MeanSquaredError):
@@ -195,16 +198,31 @@ class LEFTLossDiscrete(nn.Module):
     def __init__(self, atom_type_to_atomic_number):
         super().__init__()
         self.loss_pos = MeanSquaredError(sync_on_compute=False, dist_sync_on_step=False)
-        # self.loss_cond = MeanAbsoluteError()
+        self.loss_dist = MeanSquaredError(sync_on_compute=False, dist_sync_on_step=False)
+        self.loss_atomic = CrossEntropyMetric()
         self.atom_type_to_atomic_number = atom_type_to_atomic_number
     
-    def forward(self, net_out, pos_t, pos, node_mask, log:bool):
+    def forward(self, net_out, true_X, pos, node_mask, batch, log:bool):
         node_gt, pos_gt = net_out
-        pos_noise = pos_t - pos
-        loss_pos = self.loss_pos(pos_gt[node_mask], pos_noise)
-        
-        # loss_cond = self.loss_cond(node_gt[node_mask], atom_noise[node_mask])
-        loss = 5 * loss_pos
+        loss_pos = self.loss_pos(pos_gt[node_mask], pos)
+
+        true_X = torch.reshape(true_X, (-1, true_X.size(-1)))
+        pred_X = torch.reshape(node_gt, (-1, node_gt.size(-1)))
+        mask_X = (true_X != 0.).any(dim=-1)
+
+        flat_true_X = true_X[mask_X, :]
+        flat_pred_X = pred_X[mask_X, :]
+
+        loss_atomic = self.loss_atomic(flat_pred_X, flat_true_X)
+
+        diff_gen = pos_gt.unsqueeze(2) - pos_gt.unsqueeze(1)  # (bs, N, N, 3)
+        dist_gen = torch.norm(diff_gen, dim=-1)  # (bs, N, N)
+        pos_, _ = to_dense_batch(pos, batch)
+        diff_real = pos_.unsqueeze(2) - pos_.unsqueeze(1)  # (bs, N, N, 3)
+        dist_real = torch.norm(diff_real, dim=-1)  # (bs, N, N)
+        loss_dist = self.loss_dist(dist_gen, dist_real)
+
+        loss = 0.01 * loss_pos + 10 * loss_atomic + loss_dist
         if log:
             to_log = {
                     'train_loss/model2_loss': loss.detach()}
@@ -214,14 +232,18 @@ class LEFTLossDiscrete(nn.Module):
     
     def reset(self):
         self.loss_pos.reset()
-        # self.loss_cond.reset()
+        self.loss_atomic.reset()
+        self.loss_dist.reset()
 
     def log_epoch_metrics(self):
         pos_loss = self.loss_pos.compute() if self.loss_pos.total > 0 else -1
-        # cond_loss = self.loss_cond.compute() if self.loss_cond.total > 0 else -1
-        
+        atomic_loss = self.loss_atomic.compute() if self.loss_atomic.total_samples > 0 else -1
+        dist_loss = self.loss_dist.compute() if self.loss_dist.total > 0 else -1
+
         to_log = {
-            "train_epoch/pos_loss": pos_loss}
+            "train_epoch/pos_loss": pos_loss,
+            "train_epoch/atomic_loss": atomic_loss,
+            "train_epoch/dist_loss": dist_loss}
         if wandb.run:
             wandb.log(to_log)
         return to_log

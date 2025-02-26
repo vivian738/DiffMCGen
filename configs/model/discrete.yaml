@@ -4,10 +4,10 @@ transition: 'marginal'                          # uniform or marginal
 model: 'graph_pos_com'
 diffusion_steps: 500
 diffusion_noise_schedule: 'cosine'              # 'cosine', 'polynomial_2', 'sigmoid'
-n_layers: 12 # csd: 12 qm9:8
+n_layers: 12 # csd: 12 qm9:8 regressor:5
 
 
-extra_features: 'all'        # 'all', 'cycles', 'eigenvalues' or null
+extra_features: 'all'        # 'all', 'cycles', 'eigenvalues' or null   regressor: null
 
 # Do not set hidden_mlp_E, dim_ffE too high, computing large tensors on the edges is costly
 # At the moment (03/08), y contains quite little information
@@ -43,7 +43,7 @@ num_layers: 6
 hidden_channels: 64
 num_radial: 32
 cutoff: 10
-num_atomic: 53  #csd:53 moses: 35 qm9:9
+num_atomic: 35  #csd:53 moses: 35 qm9:9
 pos_require_grad: True
 # context: ['gap', 'mu', 'homo', 'lumo']
 context: ['lrrk2_score', 'SA', 'QED', 'acute_tox']

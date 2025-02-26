@@ -9,9 +9,12 @@ from torch.nn import Embedding
 from torch_geometric.nn import radius_graph
 from torch_geometric.nn.conv import MessagePassing
 from torch_scatter import scatter, scatter_mean
-from models.layers import PositionsMLP
+from src.models.layers import PositionsMLP
 from torch_geometric.utils import to_dense_batch
-from diffusion.diffusion_utils import get_timestep_embedding
+from src.diffusion.diffusion_utils import get_timestep_embedding
+
+from src.utils import center_pos
+
 
 def nan_to_num(vec, num=0.0):
     idx = torch.isnan(vec)
@@ -356,7 +359,7 @@ class LEFTNet(torch.nn.Module):
 
     """
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, property_norms=None):
         super(LEFTNet, self).__init__()
         self.num_layers = cfg.model.num_layers
         self.T = cfg.model.diffusion_steps
@@ -367,7 +370,8 @@ class LEFTNet(torch.nn.Module):
         self.atomic_input_dim = cfg.model.num_atomic + 1
         self.atom_type_to_atomic_number = cfg.dataset.atom_type_to_atomic_number
         # self.mapping_block = MappingBlock(self.atom_type_to_atomic_number)
-        
+        self.regressor_train = cfg.general.regressor_train
+        # self.regressor_train = False
         self.z_emb = Embedding(self.atomic_input_dim, self.hidden_channels)
         self.embedding_out = nn.Linear(self.hidden_channels, len(self.atom_type_to_atomic_number))
         self.radial_emb = rbf_emb(self.num_radial, self.cutoff)
@@ -394,7 +398,7 @@ class LEFTNet(torch.nn.Module):
             )
             self.FTEs.append(FTE(self.hidden_channels))
 
-        # self.last_layer = nn.Linear(self.hidden_channels, 1)
+
         # self.mlp_in_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
         # self.mlp_out_pos = PositionsMLP(cfg.model.hidden_mlp_dims['pos'])
         self.temb = nn.Module()
@@ -413,8 +417,10 @@ class LEFTNet(torch.nn.Module):
         self.mean_neighbor_pos = aggregate_pos(aggr='mean')
 
         self.inv_sqrt_2 = 1 / math.sqrt(2.0)
-        # self.y_mean = property_norms[cfg.model.context[0]]['mean']
-        # self.y_std = property_norms[cfg.model.context[0]]['mad']
+        if self.regressor_train:
+            self.last_layer = nn.Linear(self.hidden_channels, 1)
+            self.y_mean = property_norms[cfg.model.context[0]]['mean']
+            self.y_std = property_norms[cfg.model.context[0]]['mad']
 
         self.reset_parameters()
 
@@ -544,13 +550,19 @@ class LEFTNet(torch.nn.Module):
 
         h = self.embedding_out(s)
         node_gt = torch.nn.functional.gumbel_softmax(h, tau=1, hard=True, dim=-1)
+        if self.regressor_train:
+            s = self.last_layer(s)
+            s = scatter(s, batch, dim=0)
+            s = s * self.y_std + self.y_mean
+            return s
         # node_gt = torch.sum(node_gt * torch.arange(node_gt.size(-1), device=h.device), dim=-1)
         # atomic_gt = self.mapping_block(node_gt)
         atomic_gt, _ = to_dense_batch(x=node_gt, batch=batch)
         h = atomic_gt * node_mask.unsqueeze(-1)  #(bs, n, dx)
         # h = h * self.y_std + self.y_mean
-        # dpos_gt= pos_perturbed + pos_gt
-        pos_gt, _ = to_dense_batch(x=pos_gt, batch=batch)
+        pos_gt = center_pos(pos_gt, batch)
+        dpos_gt= pos_perturbed + pos_gt
+        pos_gt, _ = to_dense_batch(x=dpos_gt, batch=batch)
         # pos_gt = self.mlp_out_pos(pos_gt, node_mask)
         
         pos = pos_gt * node_mask.unsqueeze(-1)  #(bs, n, 3)
@@ -561,7 +573,3 @@ class LEFTNet(torch.nn.Module):
     def num_params(self):
         return sum(p.numel() for p in self.parameters())
 
-
-def center_pos(pos, batch):
-    pos_center = pos - scatter_mean(pos, batch, dim=0)[batch]
-    return pos_center

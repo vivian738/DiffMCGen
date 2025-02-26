@@ -3,7 +3,7 @@ defaults:
     - general : general_default
     - model : discrete
     - train : train_default
-    - dataset : csd
+    - dataset : moses
 
 hydra:
   job:

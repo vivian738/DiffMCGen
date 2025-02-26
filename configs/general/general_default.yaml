@@ -1,27 +1,29 @@
 # General settings
-name: 'csd_dual_lrrk2'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
+name: 'moses_dual_lrrk2_guided'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
 
 wandb: 'offline'             # online | offline | disabled
 gpus: 2                   # Multi-gpu is not implemented on this branch
 guidance_target: 'EdgeComCondMulti'
 regressor: True
+trained_regressor_path: 'outputs/2025-02-06/08-20-04-moses_dual_lrrk2_regressor/checkpoints/moses_dual_lrrk2_regressor/epoch=299.ckpt'  #test: guidance 'outputs/2022-08-30/16-03-20/cond_smiles.pkl'
+regressor_train: False  # guidance: False to make leftnet generate
 
-resume: '../outputs/2025-01-01/11-52-54-csd_dual_lrrk2/checkpoints/csd_dual_lrrk2_resume/last.ckpt'    
-# resume: null        # If resume, path to ckpt file from outputs directory in main directory
-test_only: null
-# test_only: '/raid/yyw/PharmDiGress/outputs/2024-12-16/20-28-18-moses_dual_hpk1/checkpoints/moses_dual_hpk1_resume/last.ckpt'         # Use absolute path
+#resume: 'outputs/2025-01-27/09-02-41-moses_dual_glp1/checkpoints/moses_dual_glp1_resume/last.ckpt'
+resume: null        # If resume, path to ckpt file from outputs directory in main directory
+#test_only: null
+test_only: '/raid/yyw/PharmDiGress/src/outputs/2025-01-27/09-02-41-moses_dual_glp1/checkpoints/moses_dual_glp1_resume/last.ckpt'         # Use absolute path
 
 check_val_every_n_epochs: 2
 sample_every_val: 2
 # val_check_interval: 200
-samples_to_generate: 128       # We advise to set it to 2 x batch_size maximum
+samples_to_generate: 512       # We advise to set it to 2 x batch_size maximum
 samples_to_save: 20
 chains_to_save: 1
 log_every_steps: 20
 number_chain_steps: 50        # Number of frames in each gif
 
-final_model_samples_to_generate: 1000
-final_model_samples_to_save: 200
+final_model_samples_to_generate: 10000
+final_model_samples_to_save: 2000
 final_model_chains_to_save: 1
 # final_model_samples_to_generate: 3
 # final_model_samples_to_save: 2

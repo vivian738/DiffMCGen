@@ -150,14 +150,16 @@ def setup_wandb(cfg):
     wandb.init(**kwargs)
     wandb.save('*.txt')
 
-def prepare_context(conditioning, minibatch, property_norms):
+def prepare_context(conditioning, minibatch, property_norms, target=None):
     # batch_size = minibatch['batch'][-1] + 1
     context_node_nf = 0
     context_list = []
     # for i, key in enumerate(conditioning):
     key=conditioning[0]
-
-    properties = minibatch.y[..., 0]
+    if target is not None:
+        properties = target[..., 0]
+    else:
+        properties = minibatch.y[..., 0]
 
     properties = (properties - property_norms[key]['mean']) / property_norms[key]['mad']
     if len(properties.size()) == 1:

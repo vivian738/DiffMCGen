@@ -31,6 +31,7 @@ from pytorch_lightning.utilities.model_summary import ModelSummary
 from diffusion_model import LiftedDenoisingDiffusion
 from diffusion_model_discrete import DiscreteDenoisingDiffusion
 from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
+from src.regressor import RegressorDiscrete
 
 warnings.filterwarnings("ignore", category=PossibleUserWarning)
 
@@ -152,6 +153,7 @@ def main(cfg: DictConfig):
 
     if cfg.general.test_only:
         # When testing, previous configuration is fully loaded
+        # model_kwargs = {'load_model': True}
         cfg, _ = get_resume(cfg, model_kwargs)
         os.chdir(cfg.general.test_only.split('checkpoints')[0])
     elif cfg.general.resume is not None:
@@ -192,6 +194,7 @@ def main(cfg: DictConfig):
     name = cfg.general.name
     if name == 'debug':
         print("[WARNING]: Run is called 'debug' -- it will run with fast_dev_run. ")
+
 
     use_gpu = cfg.general.gpus > 0 and torch.cuda.is_available()
     trainer = Trainer(gradient_clip_val=cfg.train.clip_grad,

@@ -98,7 +98,8 @@ class MolecularVisualization:
 
             all_bonds = torch.nonzero(A)
             for bond in all_bonds:
-                mol_3.AddBond(bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()])
+                if bond[0].item() != bond[1].item():
+                    mol_3.AddBond(bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()])
             conf = Chem.Conformer(mol_3.GetNumAtoms())   #可能顺序不一样
             for i in range(mol_3.GetNumAtoms()):
                 conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
@@ -123,6 +124,8 @@ class MolecularVisualization:
             mol_2, mol_3 = self.mol_from_graphs(molecules[i][0].numpy(), molecules[i][1].numpy(), molecules[i][2].numpy())
             if mol_2 is not None:
                 self.plot_save_molecule(molecules[i], mol_2, save_path=file_path, conformer2d=conformer2d)
+                if log is not None and wandb.run:
+                    wandb.log({log: wandb.Image(file_path)}, commit=True)
             elif mol_3 is not None:
                 self.plot_save_molecule(molecules[i], mol_3, save_path=file_path, conformer2d=conformer2d)
 

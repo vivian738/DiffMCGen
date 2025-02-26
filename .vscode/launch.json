@@ -13,7 +13,7 @@
             "console": "integratedTerminal",
             "args": [],
             "env": {"PYTHONUNBUFFERED":"1",
-                    "CUDA_VISIBLE_DEVICES": "3"},
+                    "CUDA_VISIBLE_DEVICES": "2,3"},
             "showReturnValue": true, // 是否在调试过程中显示函数的返回值
             "redirectOutput": true, // 是否将程序输出重定向到调试控制台，而不是终端
             "justMyCode": false

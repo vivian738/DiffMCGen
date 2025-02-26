@@ -186,7 +186,7 @@ class BasicMolecularMetrics(object):
 def mol2smiles(mol):
     try:
         Chem.SanitizeMol(mol)
-    except ValueError:
+    except:
         return None
     return Chem.MolToSmiles(mol)
 
@@ -222,7 +222,8 @@ def build_molecule(atom_types, edge_types, positions, atom_decoder, dataset_info
 
             all_bonds = torch.nonzero(A)
             for bond in all_bonds:
-                mol_3.AddBond(bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()])
+                if bond[0].item() != bond[1].item():
+                    mol_3.AddBond(bond[0].item(), bond[1].item(), bond_dict[E[bond[0], bond[1]].item()])
             conf = Chem.Conformer(mol_3.GetNumAtoms())   #可能顺序不一样
             for i in range(mol_3.GetNumAtoms()):
                 conf.SetAtomPosition(i, Point3D(positions[i][0].item(), positions[i][1].item(), positions[i][2].item()))
@@ -436,9 +437,9 @@ def build_xae_molecule(positions, atom_types, dataset_info):
     for i in range(n):
         for j in range(i):
             pair = sorted([atom_types[i], atom_types[j]])
-            if dataset_info.name == 'qm9':
+            if dataset_info.name == 'QM9':
                 order = get_bond_order(atom_decoder[pair[0]], atom_decoder[pair[1]], dists[i, j])
-            elif dataset_info.name == 'csd' or dataset_info.name == 'moses':
+            elif dataset_info.name == 'CSD' or dataset_info.name == 'MOSES':
                 order = get_bond_order(atom_decoder[pair[0]], atom_decoder[pair[1]], dists[i, j], check_exists=True)
 
             # TODO: a batched version of get_bond_order to avoid the for loop
