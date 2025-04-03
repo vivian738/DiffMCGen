@@ -66,4 +66,15 @@ The node counts and the distribution of node types and edge types can be compute
 Once the dataset file is written, the code in main.py can be adapted to handle the new dataset, and a new file can be added in `configs/dataset`.
 
 
+## Citation
+If you find this repo useful, please cite our related paper.
 
+@article{https://doi.org/10.1002/advs.202417726,
+    author = {Yang, Yuwei and Gu, Shukai and Liu, Bo and Gong, Xiaoqing and Lu, Ruiqiang and Qiu, Jiayue and Yao, Xiaojun and Liu, Huanxiang},
+    title = {DiffMC-Gen: A Dual Denoising Diffusion Model for Multi-Conditional Molecular Generation},
+    journal = {Advanced Science},
+    volume = {n/a},
+    number = {n/a},
+    pages = {2417726},
+    keywords = {deep learning, diffusion model, drug design, molecular generation, multi-objective optimization},
+    doi = {https://doi.org/10.1002/advs.202417726}}
