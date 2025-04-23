@@ -66,4 +66,4 @@ Once the dataset file is written, the code in main.py can be adapted to handle t
 ## Citation
 If you find this repo useful, please cite our related paper.
 
-- Y. Yang, S. Gu, B. Liu, X. Gong, R. Lu, J. Qiu, X. Yao, H. Liu, **DiffMC-Gen: A Dual Denoising Diffusion Model for Multi-Conditional Molecular Generation.** *Adv. Sci.* **2025**, 2417726. ![https://doi.org/10.1002/advs.202417726]
+- Y. Yang, S. Gu, B. Liu, X. Gong, R. Lu, J. Qiu, X. Yao, H. Liu, **DiffMC-Gen: A Dual Denoising Diffusion Model for Multi-Conditional Molecular Generation.** *Adv. Sci.* **2025**, 2417726. [https://doi.org/10.1002/advs.202417726]
