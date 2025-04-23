@@ -31,9 +31,6 @@ This code was tested with PyTorch 2.0.1, cuda 11.8 and torch_geometrics 2.3.1
 ## Run the code
   
   - All code is currently launched through `python3 main.py`. Check hydra documentation (https://hydra.cc/) for overriding default parameters.
-  - To run the debugging code: `python3 main.py +experiment=debug.yaml`. We advise to try to run the debug mode first
-    before launching full experiments.
-  - To run a code on only a few batches: `python3 main.py general.name=test`.
   - To run the dual model: `python3 main.py`
   - You can specify the dataset with `python3 main.py dataset=csd`. Look at `configs/dataset` for the list
 of datasets that are currently available
@@ -69,7 +66,7 @@ Once the dataset file is written, the code in main.py can be adapted to handle t
 ## Citation
 If you find this repo useful, please cite our related paper.
 
-@article{https://doi.org/10.1002/advs.202417726,  
+`@article{https://doi.org/10.1002/advs.202417726,  
 author = {Yang, Yuwei and Gu, Shukai and Liu, Bo and Gong, Xiaoqing and Lu, Ruiqiang and Qiu, Jiayue and Yao, Xiaojun and Liu, Huanxiang},  
 title = {DiffMC-Gen: A Dual Denoising Diffusion Model for Multi-Conditional Molecular Generation},  
 journal = {Advanced Science},  
@@ -78,4 +75,4 @@ number = {n/a},
 pages = {2417726},  
 keywords = {deep learning, diffusion model, drug design, molecular generation, multi-objective optimization},  
 doi = {https://doi.org/10.1002/advs.202417726}  
-}
+}`
