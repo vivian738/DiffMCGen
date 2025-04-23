@@ -66,22 +66,4 @@ Once the dataset file is written, the code in main.py can be adapted to handle t
 ## Citation
 If you find this repo useful, please cite our related paper.
 
-`@article{https://doi.org/10.1002/advs.202417726,  
-
-author = {Yang, Yuwei and Gu, Shukai and Liu, Bo and Gong, Xiaoqing and Lu, Ruiqiang and Qiu, Jiayue and Yao, Xiaojun and Liu, Huanxiang},  
-  
-title = {DiffMC-Gen: A Dual Denoising Diffusion Model for Multi-Conditional Molecular Generation},  
-
-journal = {Advanced Science},  
-  
-  volume = {n/a},  
-  
-  number = {n/a},  
-  
-  pages = {2417726},  
-  
-  keywords = {deep learning, diffusion model, drug design, molecular generation, multi-objective optimization},  
-  
-  doi = {https://doi.org/10.1002/advs.202417726}  
-  
-  }`
+- Y. Yang, S. Gu, B. Liu, X. Gong, R. Lu, J. Qiu, X. Yao, H. Liu, **DiffMC-Gen: A Dual Denoising Diffusion Model for Multi-Conditional Molecular Generation.** *Adv. Sci.* **2025**, 2417726. ![https://doi.org/10.1002/advs.202417726]
