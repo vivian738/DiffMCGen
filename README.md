@@ -31,9 +31,22 @@ This code was tested with PyTorch 2.0.1, cuda 11.8 and torch_geometrics 2.3.1
 ## Run the code
   
   - All code is currently launched through `python3 main.py`. Check hydra documentation (https://hydra.cc/) for overriding default parameters.
-  - To run the dual model: `python3 main.py`
   - You can specify the dataset with `python3 main.py dataset=csd`. Look at `configs/dataset` for the list
-of datasets that are currently available
+of datasets that are currently available.
+
+1. Train the core model  
+   Run the following command to train the core model. Please modify the relevant parameters in the config file as needed:
+
+   ```bash
+   python src/main.py
+   ```
+
+2. Train the regressor  
+   After training the core model, run the following command to train the regressor. Also, adjust the corresponding parameters in the config file:
+
+   ```bash
+   python src/train_regressor.py
+   ```
     
 ## Checkpoints
 
@@ -44,6 +57,14 @@ of datasets that are currently available
 ## Generated samples
 
 Set 'test_only' in configs.general as the path of trained checkpoints.
+
+# Joint inference and generation  
+   In the generated samples step, run the following command to perform joint inference. Enable test_only mode and specify the correct checkpoint (ckpt) paths in the config to generate final results:
+
+   ```bash
+   python src/guided_main.py
+   ```
+   - Note: Modify the test_only mode and fill in the appropriate checkpoint file paths.
 
 
 ## Use DiffMC-Gen on a new dataset
