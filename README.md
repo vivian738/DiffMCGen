@@ -58,7 +58,7 @@ of datasets that are currently available.
 
 Set 'test_only' in configs.general as the path of trained checkpoints.
 
-# Joint inference and generation  
+### Joint inference and generation  
    In the generated samples step, run the following command to perform joint inference. Enable test_only mode and specify the correct checkpoint (ckpt) paths in the config to generate final results:
 
    ```bash
