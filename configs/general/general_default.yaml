@@ -1,22 +1,23 @@
 # General settings
-name: 'moses_dual_lrrk2_guided'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
+name: 'csd_dual_lrrk2'      # Warning: 'debug' and 'test' are reserved name that have a special behavior
 
 wandb: 'offline'             # online | offline | disabled
-gpus: 2                   # Multi-gpu is not implemented on this branch
+gpus: 1                   # Multi-gpu is not implemented on this branch
 guidance_target: 'EdgeComCondMulti'
 regressor: True
-trained_regressor_path: 'outputs/2025-02-06/08-20-04-moses_dual_lrrk2_regressor/checkpoints/moses_dual_lrrk2_regressor/epoch=299.ckpt'  #test: guidance 'outputs/2022-08-30/16-03-20/cond_smiles.pkl'
-regressor_train: False  # guidance: False to make leftnet generate
+trained_regressor_path: 'outputs/2026-01-06/18-47-38-csd_dual_lrrk2_regressor/checkpoints/csd_dual_lrrk2_regressor/epoch=299.ckpt'  #test: guidance 'outputs/2022-08-30/16-03-20/cond_smiles.pkl'
+regressor_train: True  # guidance: False to make leftnet generate
+lambda_3d: 0.1
 
-#resume: 'outputs/2025-01-27/09-02-41-moses_dual_glp1/checkpoints/moses_dual_glp1_resume/last.ckpt'
-resume: null        # If resume, path to ckpt file from outputs directory in main directory
-#test_only: null
-test_only: '/raid/yyw/PharmDiGress/src/outputs/2025-01-27/09-02-41-moses_dual_glp1/checkpoints/moses_dual_glp1_resume/last.ckpt'         # Use absolute path
+resume: 'outputs/2025-12-17/17-02-10-csd_dual_lrrk2/checkpoints/csd_dual_lrrk2_resume/epoch=294.ckpt'
+# resume: null        # If resume, path to ckpt file from outputs directory in main directory
+test_only: null
+#test_only: 'outputs/2025-01-27/09-02-41-moses_dual_glp1/checkpoints/moses_dual_glp1_resume/last.ckpt'         # Use absolute path
 
-check_val_every_n_epochs: 2
+check_val_every_n_epochs: 2  #core: 5 regreesor: 2
 sample_every_val: 2
 # val_check_interval: 200
-samples_to_generate: 512       # We advise to set it to 2 x batch_size maximum
+samples_to_generate: 128       # We advise to set it to 2 x batch_size maximum
 samples_to_save: 20
 chains_to_save: 1
 log_every_steps: 20

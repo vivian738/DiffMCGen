@@ -5,7 +5,7 @@ import os
 # os.environ["NCCL_DEBUG"] = "INFO"   #debug use
 os.environ['NCCL_DEBUG_SUBSYS'] = 'COLL'
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ['HYDRA_FULL_ERROR']='1'   #
 os.environ['NCCL_P2P_DISABLE']='1'
 os.environ["WORLD_SIZE"] = "1"
@@ -28,7 +28,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import utils
 from pytorch_lightning.utilities.model_summary import ModelSummary
 
-from diffusion_model import LiftedDenoisingDiffusion
+# from diffusion_model import LiftedDenoisingDiffusion
 from diffusion_model_discrete import DiscreteDenoisingDiffusion
 from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
 from src.regressor import RegressorDiscrete
@@ -40,11 +40,10 @@ def get_resume(cfg, model_kwargs):
     """ Resumes a run. It loads previous config without allowing to update keys (used for testing). """
     saved_cfg = cfg.copy()
     name = cfg.general.name + '_resume'
-    resume = cfg.general.test_only
-    if cfg.model.type == 'discrete':
-        model = DiscreteDenoisingDiffusion.load_from_checkpoint(resume, **model_kwargs)
-    else:
-        model = LiftedDenoisingDiffusion.load_from_checkpoint(resume, **model_kwargs)
+    current_path = os.path.dirname(os.path.realpath(__file__))
+    root_dir = current_path.split('src')[0]
+    resume = os.path.join(root_dir, cfg.general.test_only)
+    model = DiscreteDenoisingDiffusion.load_from_checkpoint(resume, **model_kwargs)
     cfg = model.cfg
     cfg.general.test_only = resume
     cfg.general.name = name
@@ -57,14 +56,11 @@ def get_resume_adaptive(cfg, model_kwargs):
     saved_cfg = cfg.copy()
     # Fetch path to this file to get base path
     current_path = os.path.dirname(os.path.realpath(__file__))
-    root_dir = current_path.split('outputs')[0]
+    root_dir = current_path.split('src')[0]
 
     resume_path = os.path.join(root_dir, cfg.general.resume)
 
-    if cfg.model.type == 'discrete':
-        model = DiscreteDenoisingDiffusion.load_from_checkpoint(resume_path, **model_kwargs)
-    else:
-        model = LiftedDenoisingDiffusion.load_from_checkpoint(resume_path, **model_kwargs)
+    model = DiscreteDenoisingDiffusion.load_from_checkpoint(resume_path, **model_kwargs)
     new_cfg = model.cfg
 
     for category in cfg:
@@ -163,10 +159,7 @@ def main(cfg: DictConfig):
 
     utils.create_folders(cfg)
 
-    if cfg.model.type == 'discrete':
-        model = DiscreteDenoisingDiffusion(cfg=cfg, **model_kwargs)
-    else:
-        model = LiftedDenoisingDiffusion(cfg=cfg, **model_kwargs)
+    model = DiscreteDenoisingDiffusion(cfg=cfg, **model_kwargs)
 
     callbacks = []
     params_to_ignore = ['module.model.train_smiles', 'module.model.dataset_infos']
@@ -176,7 +169,7 @@ def main(cfg: DictConfig):
     if cfg.train.save_model:
         checkpoint_callback = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}",
                                               filename='{epoch}',
-                                              monitor='val/epoch_NLL',
+                                              monitor='val/epoch_loss',
                                               save_top_k=5,
                                               mode='min',
                                               every_n_epochs=1)
@@ -199,7 +192,7 @@ def main(cfg: DictConfig):
     use_gpu = cfg.general.gpus > 0 and torch.cuda.is_available()
     trainer = Trainer(gradient_clip_val=cfg.train.clip_grad,
                     #   profiler="simple",
-                      strategy="ddp_find_unused_parameters_true", # Needed to load old checkpoints: ddp_find_unused_parameters_true
+                      strategy="auto", # Needed to load old checkpoints: ddp_find_unused_parameters_true
                       accelerator='gpu' if use_gpu else 'cpu',
                       devices=cfg.general.gpus if use_gpu else 1,
                       max_epochs=cfg.train.n_epochs,

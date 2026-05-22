@@ -2,7 +2,7 @@ import os
 import torch_geometric.utils
 from omegaconf import OmegaConf, open_dict
 from torch_geometric.utils import to_dense_adj, to_dense_batch
-from torch_scatter import scatter_add, scatter_mean
+from torch_scatter import scatter_add, scatter_mean, scatter
 import torch
 import omegaconf
 import wandb
@@ -260,3 +260,8 @@ def write_sdf_file(sdf_path, molecules):
             w.write(m)
 
     print(f'Wrote SDF file to {sdf_path}')
+    
+    
+def remove_mean(score, batch):
+    mean = scatter(score, batch, dim=0, reduce='mean')
+    return score - mean[batch]

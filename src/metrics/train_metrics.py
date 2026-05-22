@@ -10,6 +10,7 @@ from metrics.abstract_metrics import SumExceptBatchMetric, SumExceptBatchMSE, Su
 from torch_scatter import scatter_add
 from diffusion.layers import eq_transform, get_distance, is_train_edge
 
+from src import utils
 from src.utils import center_pos
 
 
@@ -246,4 +247,75 @@ class LEFTLossDiscrete(nn.Module):
             "train_epoch/dist_loss": dist_loss}
         if wandb.run:
             wandb.log(to_log)
+        return to_log
+    
+    
+class LEFTScoreLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.score_loss = MeanSquaredError()
+
+    def forward(
+        self,
+        score_pred,      # (N, 3) sparse
+        pos,             # original x0 (N, 3) sparse
+        pos_t,           # x_t (N, 3) sparse
+        gamma,           # (B,) or (N,)
+        node_mask,
+        batch,
+        log: bool,
+    ):
+        """
+        score_gt = -(x_t - sqrt(alpha) * x0) / sigma^2
+        """
+
+        # ---- compute alpha / sigma^2 from gamma ----
+        if gamma.dim() == 1:
+            gamma = gamma[batch]
+
+        alpha = torch.sigmoid(-gamma).unsqueeze(-1)
+        sigma2 = torch.sigmoid(gamma).unsqueeze(-1)
+
+        # ---- build GT score ----
+        sigma2 = sigma2.clamp_min(1e-12)
+        score_gt = -(pos_t - torch.sqrt(alpha) * pos) / sigma2
+
+        # ---- zero-mean constraint ----
+        score_gt = utils.remove_mean(score_gt, batch)
+        score_pred = utils.remove_mean(score_pred, batch)
+
+        # ---- dense for masking ----
+        score_gt_dense, _ = to_dense_batch(score_gt, batch)
+        score_pred_dense, _ = to_dense_batch(score_pred, batch)
+        mask = node_mask.float().unsqueeze(-1)   # (B, N, 1)
+
+        diff2 = (score_pred_dense - score_gt_dense) ** 2
+        loss = (diff2 * mask).sum() / (mask.sum() * diff2.size(-1))
+
+        # --- metric update for epoch logging (detach is implicit in torchmetrics state usage) ---
+        self.score_loss.update(score_pred_dense[node_mask], score_gt_dense[node_mask])
+        if log:
+            to_log = {
+                    'train_loss/model2_loss': loss.detach()}
+            if wandb.run:
+                wandb.log(to_log, commit=True)
+
+        return loss
+    
+    def compute(self):
+        """封装 compute 方法以保持一致性"""
+        return self.score_loss.compute()
+    
+    def reset(self):
+
+            self.score_loss.reset()
+    
+
+    def log_epoch_metrics(self):
+        epoch_score_loss = self.score_loss.compute() if self.score_loss.total > 0 else -1
+
+        to_log = {"train_epoch/score_mse": epoch_score_loss}
+        if wandb.run:
+            wandb.log(to_log, commit=False)
+
         return to_log

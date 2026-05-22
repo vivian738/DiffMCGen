@@ -1,5 +1,10 @@
 # Rdkit import should be first, do not move it
 from rdkit import Chem
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import wandb
@@ -25,7 +30,7 @@ warnings.filterwarnings("ignore", category=PossibleUserWarning)
 
 def setup_wandb(cfg):
     config_dict = omegaconf.OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    kwargs = {'name': cfg.general.name, 'project': 'graph_ddm_regressor', 'config': config_dict,
+    kwargs = {'name': cfg.general.name, 'project': 'DDMCM_regressor', 'config': config_dict,
               'settings': wandb.Settings(_disable_stats=True),
               'reinit': True, 'mode': cfg.general.wandb}
     wandb.init(**kwargs)
@@ -65,7 +70,8 @@ def main(cfg: DictConfig):
 
     dataset_infos.compute_input_output_dims(datamodule=datamodule, extra_features=extra_features,
                                             domain_features=domain_features)
-    dataset_infos.output_dims = {'X': 0, 'E': 0, 'y': 4}
+    dataset_infos.input_dims = {'X': dataset_infos.input_dims['X'], 'E': dataset_infos.input_dims['E'], 'y': 1}  # regressor: y:0 + time 1
+    dataset_infos.output_dims = {'X': dataset_infos.output_dims['X'], 'E': dataset_infos.output_dims['E'], 'y': 4}
 
     train_metrics = TrainMolecularMetricsDiscrete(dataset_infos)
 
@@ -95,9 +101,9 @@ def main(cfg: DictConfig):
     if cfg.train.save_model:
         checkpoint_callback = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}",
                                               filename='{epoch}',
-                                              monitor='val/epoch_mae',
+                                              monitor='val/epoch_mae_total',
                                               save_last=True,
-                                              save_top_k=-1,    # was 5
+                                              save_top_k=5,    # was 5
                                               mode='min',
                                               every_n_epochs=1)
         print("Checkpoints will be logged to", checkpoint_callback.dirpath)

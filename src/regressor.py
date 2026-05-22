@@ -10,7 +10,7 @@ from torchmetrics import MeanSquaredError, MeanAbsoluteError
 from src.models.transformer_model import GraphTransformer
 from diffusion.distributions import DistributionProperty
 from models.LeftNet import LEFTNet
-from src.diffusion.noise_schedule import PredefinedNoiseScheduleDiscrete, MarginalUniformTransition
+from src.diffusion.noise_schedule import PredefinedNoiseSchedule, PredefinedNoiseScheduleDiscrete, MarginalUniformTransition
 from src.diffusion import diffusion_utils
 from src.metrics.abstract_metrics import NLL, SumExceptBatchKL, SumExceptBatchMetric
 from src.metrics.train_metrics import TrainLossDiscrete, LEFTLossDiscrete
@@ -57,15 +57,6 @@ class RegressorDiscrete(pl.LightningModule):
         self.val_y_kl = SumExceptBatchKL()
         self.val_X_logp = SumExceptBatchMetric()
         self.val_E_logp = SumExceptBatchMetric()
-        self.val_y_logp = SumExceptBatchMetric()
-
-        self.test_nll = NLL()
-        self.test_X_kl = SumExceptBatchKL()
-        self.test_E_kl = SumExceptBatchKL()
-        self.test_y_kl = SumExceptBatchKL()
-        self.test_X_logp = SumExceptBatchMetric()
-        self.test_E_logp = SumExceptBatchMetric()
-        self.test_y_logp = SumExceptBatchMetric()
 
         self.train_metrics = train_metrics
         self.sampling_metrics = sampling_metrics
@@ -85,6 +76,8 @@ class RegressorDiscrete(pl.LightningModule):
 
         self.noise_schedule = PredefinedNoiseScheduleDiscrete(cfg.model.diffusion_noise_schedule,
                                                               timesteps=cfg.model.diffusion_steps)
+        self.pos_noise_schedule = PredefinedNoiseSchedule(cfg.model.diffusion_noise_schedule,
+                                                              timesteps=self.T)
 
         cfg.general.regressor_train=regressor_train
         # if cfg.general.regressor_train:
@@ -122,12 +115,6 @@ class RegressorDiscrete(pl.LightningModule):
         self.test_loss = MeanAbsoluteError()
         self.best_val_mae = 1e8
 
-        self.val_loss_each = [MeanAbsoluteError().to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')) for i
-                              in range(4)]
-        self.test_loss_each = [MeanAbsoluteError().to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')) for
-                               i in range(4)]
-        self.target_dict = { i : cfg.model.context[i] for i in range(0, len(cfg.model.context) ) }
-
 
     def training_step(self, data, i):
         # input zero y to generate noised graphs
@@ -140,7 +127,7 @@ class RegressorDiscrete(pl.LightningModule):
         noisy_data = self.apply_noise(X, E, data.y, node_mask)
         extra_data = self.compute_extra_data(noisy_data)
         context = utils.prepare_context(self.args.model.context, data, self.property_norms, target)
-        pred, net_out = self.forward(noisy_data, extra_data, node_mask,
+        pred, net_out, gamma_t, pos_t = self.forward(noisy_data, extra_data, node_mask,
                                                       data.pos, data.batch, context)
         # pred = self.forward(noisy_data, extra_data, node_mask)
 
@@ -177,22 +164,31 @@ class RegressorDiscrete(pl.LightningModule):
         self.start_epoch_time = time.time()
         self.train_loss.reset()
         self.train_loss2.reset()
-        self.train_metrics.reset()
 
     def on_train_epoch_end(self) -> None:
-        train_mse = self.train_loss.compute() + self.train_loss2.compute()
+        train_mse_dist = self.train_loss.compute()
+        train_mse_3d = self.train_loss2.compute()
 
-        to_log = {"train_epoch/mse": train_mse}
-        print(f"Epoch {self.current_epoch}: train_mse: {train_mse :.3f} -- {time.time() - self.start_epoch_time:.1f}s ")
+        train_mse = train_mse_dist + self.args.general.lambda_3d * train_mse_3d
+
+        to_log = {
+            "train_epoch/mse_total": train_mse,
+            "train_epoch/mse_dist": train_mse_dist,
+            "train_epoch/mse_3d": train_mse_3d,
+        }
+
+        print(
+            f"Epoch {self.current_epoch}: "
+            f"train_mse_total: {train_mse:.3f} "
+            f"(dist={train_mse_dist:.3f}, 3d={train_mse_3d:.3f}) "
+            f"-- {time.time() - self.start_epoch_time:.1f}s"
+        )
 
         wandb.log(to_log)
-        self.train_loss.reset()
-        self.train_loss2.reset()
 
     def on_validation_epoch_start(self) -> None:
         self.val_loss.reset()
         self.val_loss2.reset()
-        reset_metrics(self.val_loss_each)
 
     def validation_step(self, data, i):
         # input zero y to generate noised graphs
@@ -205,37 +201,44 @@ class RegressorDiscrete(pl.LightningModule):
         extra_data = self.compute_extra_data(noisy_data)
         # pred = self.forward(noisy_data, extra_data, node_mask)
         context = utils.prepare_context(self.args.model.context, data, self.property_norms, target)
-        pred, net_out = self.forward(noisy_data, extra_data, node_mask,
+        pred, net_out, gamma_t, pos_t = self.forward(noisy_data, extra_data, node_mask,
                                                       data.pos, data.batch, context)
         mae = self.compute_val_loss(pred, net_out, target)
         # self.log('val_loss', mae, prog_bar=True, on_step=False, on_epoch=True)
         return {'val_loss': mae}
 
     def on_validation_epoch_end(self) -> None:
-        val_mae = self.val_loss.compute() + self.val_loss2.compute()
-        to_log = {"val/epoch_mae": val_mae}
-        print(f"Epoch {self.current_epoch}: val_mae: {val_mae :.3f}")
+        val_mae_dist = self.val_loss.compute()
+        val_mae_3d = self.val_loss2.compute()
+
+        val_mae = val_mae_dist + self.args.general.lambda_3d * val_mae_3d
+
+        to_log = {
+            "val/epoch_mae_total": val_mae,
+            "val/epoch_mae_dist": val_mae_dist,
+            "val/epoch_mae_3d": val_mae_3d,
+        }
+
+        print(
+            f"Epoch {self.current_epoch}: "
+            f"val_mae_total: {val_mae:.3f} "
+            f"(dist={val_mae_dist:.3f}, 3d={val_mae_3d:.3f})"
+        )
+
         wandb.log(to_log)
-        self.log('val/epoch_mae', val_mae, on_epoch=True, on_step=False)
+        self.log('val/epoch_mae_total', val_mae, on_epoch=True, on_step=False)
 
         if val_mae < self.best_val_mae:
             self.best_val_mae = val_mae
-        print('Val loss: %.4f \t Best val loss:  %.4f\n' % (val_mae, self.best_val_mae))
 
+        print(
+            'Val loss: %.4f \t Best val loss:  %.4f\n'
+            % (val_mae, self.best_val_mae)
+        )
 
-        print('Val loss each target:')
-        for i in range(4):
-            mae_each = self.val_loss_each[i].compute()
-            print(f"Target {self.target_dict[i]}: val_mae: {mae_each :.3f}")
-            to_log_each = {f"val_epoch/{self.target_dict[i]}_mae": mae_each}
-            wandb.log(to_log_each)
-
-        self.val_loss.reset()
-        reset_metrics(self.val_loss_each)
 
     def on_test_epoch_start(self) -> None:
         self.test_loss.reset()
-        reset_metrics(self.test_loss_each)
 
     def apply_noise(self, X, E, y, node_mask):
         """ Sample noise and apply it to the data. """
@@ -289,13 +292,14 @@ class RegressorDiscrete(pl.LightningModule):
            Output: nll (size 1)
        """
 
-        for i in range(pred.y.shape[1]):
-            mae_each = self.val_loss_each[i](pred.y[:, i], target[:, i])
+        # distribution-level validation
+        loss_dist = self.val_loss(pred.y, target)
 
-        mae1 = self.val_loss(pred.y, target)
-        mae2 = self.val_loss2(net_out, target[..., :1])
-        mae = mae1 + mae2
-        return mae
+        # structure-aware validation
+        loss_3d = self.val_loss2(net_out, target[..., :1])
+
+        loss = loss_dist + self.args.general.lambda_3d * loss_3d
+        return loss
 
     def forward(self, noisy_data, extra_data, node_mask,
                 pos=None, batch=None, context=None):
@@ -304,16 +308,16 @@ class RegressorDiscrete(pl.LightningModule):
         y = torch.hstack((noisy_data['y_t'], extra_data.y)).float()
         output1 = self.model1(X, E, y, node_mask)
         if pos == None:
-            output2, atomic_t, pos_t = None, None, None
+            output2, gamma_t, pos_t = None, None, None
         else:
-            atomic_t, pos_t = self.left_process(pos, batch, X, noisy_data['beta_t'], node_mask)
+            atomic_t, pos_t, gamma_t = self.left_process(pos, batch, output1.X.detach(), noisy_data['t'], node_mask)
             output2 = self.model2(z=atomic_t,
                                   node_mask=node_mask,
                                   pos_perturbed=pos_t,
                                   batch=batch,
                                   context=context,
                                   time_step=noisy_data['time_step'])
-        return output1, output2
+        return output1, output2, gamma_t, pos_t
 
     def compute_extra_data(self, noisy_data):
         """ At every training step (after adding noise) and step in sampling, compute extra information and append to
@@ -341,37 +345,33 @@ class RegressorDiscrete(pl.LightningModule):
            noisy_data: dict
            Output: mse (size 1)
        """
-        mse1 = self.train_loss(pred.y, target)
-        mse2 = self.train_loss2(net_out, target[...,:1])
-        mse = mse1 + mse2
+        loss_dist = self.train_loss(pred.y, target)
+        loss_3d = self.train_loss2(net_out, target[...,:1])
+        loss = loss_dist + self.args.general.lambda_3d * loss_3d
 
         if log:
-            wandb.log({"train_loss/batch_mse": mse.item()}, commit=True)
-        return mse
-    def left_process(self, pos, batch, X, betas, node_mask):
-        pos, _ = to_dense_batch(x=pos, batch=batch)
-        pos = pos.float() * node_mask.unsqueeze(-1)
-        alphas = (1. - torch.clamp(betas, min=0, max=0.999)).cumprod(dim=0)
-        # a = alphas.index_select(0, time_step)  # (G, )
+            wandb.log({
+                "train_loss/dist": loss_dist.item(),
+                "train_loss/3d": loss_3d.item(),
+                "train_loss/total": loss.item()
+            }, commit=True)
 
-        a_pos = alphas.index_select(0, batch)  # (N, 1)
+        return loss
+    def left_process(self, pos, batch, X, t_float, node_mask):
+        gamma_t = self.pos_noise_schedule(t_float.squeeze(-1))            # (B,)
+        alpha_n = torch.sigmoid(-gamma_t)[batch].unsqueeze(-1)   # (N,1)
+        sigma_n = torch.sqrt(torch.sigmoid(gamma_t))[batch].unsqueeze(-1)  # (N,1)
 
-        """
-        Independently
-        - Perterb pos
-        """
-        pos_noise = torch.zeros(size=pos.size(), device=pos.device)
-        pos_noise.normal_()
-        pos_perturbed = pos[node_mask] + utils.center_pos(pos_noise[node_mask], batch) * (1.0 - a_pos).sqrt() / a_pos.sqrt()  #batch, 3
-        """
-        Perterb atom
-        """
         X_exist = torch.argmax(X, dim=-1)
         atomic_t = X_exist.cpu().apply_(lambda x: self.atom_type_to_atomic_number.get(x, x)).to(X.device)
-        atomic_t = atomic_t * node_mask
+        atomic_t = atomic_t[node_mask]              # (num_nodes,)
+        eps = torch.randn_like(pos)
+        eps = utils.remove_mean(eps, batch)
+        # ---- forward diffusion ----
+        pos_t = torch.sqrt(alpha_n) * pos + sigma_n * eps
 
         # atom_noise = torch.zeros(size=atomic_t.size(), device=atomic_t.device)
         # atom_noise.normal_()  #bs, n
         # atom_type = torch.cat([atomic_t[:, :-1] / 4, atomic_t[:, -1:] / 10], dim=1)
         # atom_perturbed = a_pos.sqrt() * atom_type[node_mask].unsqueeze(-1) + (1.0 - a_pos).sqrt() * atom_noise[node_mask].unsqueeze(-1) #batch,1
-        return atomic_t[node_mask], pos_perturbed
+        return atomic_t, pos_t, gamma_t

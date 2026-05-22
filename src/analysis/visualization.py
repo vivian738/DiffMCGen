@@ -214,7 +214,7 @@ class MolecularVisualization:
         ax.zaxis.pane.set_alpha(0)
         ax._axis3don = False
 
-        ax.w_xaxis.line.set_color("white")
+        ax.xaxis.line.set_color("white")
 
         # max_value = positions.abs().max().item()
         axis_lim = 0.7

@@ -6,7 +6,7 @@ import os
 # os.environ["NCCL_DEBUG"] = "INFO"   #debug use
 os.environ['NCCL_DEBUG_SUBSYS'] = 'COLL'
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 os.environ['HYDRA_FULL_ERROR']='1'   #
 os.environ['NCCL_P2P_DISABLE']='1'
 os.environ["WORLD_SIZE"] = "1"
@@ -29,7 +29,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import utils
 from pytorch_lightning.utilities.model_summary import ModelSummary
 
-from diffusion_model import LiftedDenoisingDiffusion
+# from diffusion_model import LiftedDenoisingDiffusion
 from diffusion_model_discrete import DiscreteDenoisingDiffusion
 from diffusion.extra_features import DummyExtraFeatures, ExtraFeatures
 from src.regressor import RegressorDiscrete
@@ -43,10 +43,7 @@ def get_resume(cfg, model_kwargs):
     name = cfg.general.name + '_resume'
     resume = cfg.general.test_only
 
-    if cfg.model.type == 'discrete':
-        model = DiscreteDenoisingDiffusion.load_from_checkpoint(resume, **model_kwargs)
-    else:
-        model = LiftedDenoisingDiffusion.load_from_checkpoint(resume, **model_kwargs)
+    model = DiscreteDenoisingDiffusion.load_from_checkpoint(resume, **model_kwargs)
     cfg = model.cfg
     cfg.general.test_only = resume
     cfg.general.name = name
@@ -59,14 +56,11 @@ def get_resume_adaptive(cfg, model_kwargs):
     saved_cfg = cfg.copy()
     # Fetch path to this file to get base path
     current_path = os.path.dirname(os.path.realpath(__file__))
-    root_dir = current_path.split('outputs')[0]
+    root_dir = current_path.split('src')[0]
 
     resume_path = os.path.join(root_dir, cfg.general.resume)
 
-    if cfg.model.type == 'discrete':
-        model = DiscreteDenoisingDiffusion.load_from_checkpoint(resume_path, **model_kwargs)
-    else:
-        model = LiftedDenoisingDiffusion.load_from_checkpoint(resume_path, **model_kwargs)
+    model = DiscreteDenoisingDiffusion.load_from_checkpoint(resume_path, **model_kwargs)
     new_cfg = model.cfg
 
     for category in cfg:
@@ -153,14 +147,14 @@ def main(cfg: DictConfig):
     else:
         raise NotImplementedError("Unknown dataset {}".format(cfg["dataset"]))
 
-    cfg_pretrained, guidance_sampling_model = get_resume(cfg, model_kwargs)
+    cfg_pretrained, guidance_sampling_model = get_resume_adaptive(cfg, model_kwargs)
     OmegaConf.set_struct(cfg, True)
     with open_dict(cfg):
         # cfg.model = cfg_pretrained.model
         cfg.guidance = {'use_guidance': True, 'lambda_guidance': 0.5}
     utils.create_folders(cfg)
     current_path = os.path.dirname(os.path.realpath(__file__))
-    root_dir = current_path.split('outputs')[0]
+    root_dir = current_path.split('src')[0]
 
     guidance_model = RegressorDiscrete.load_from_checkpoint(os.path.join(root_dir, cfg.general.trained_regressor_path))
     model_kwargs['guidance_model'] = guidance_model

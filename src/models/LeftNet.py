@@ -9,6 +9,7 @@ from torch.nn import Embedding
 from torch_geometric.nn import radius_graph
 from torch_geometric.nn.conv import MessagePassing
 from torch_scatter import scatter, scatter_mean
+from src import utils
 from src.models.layers import PositionsMLP
 from torch_geometric.utils import to_dense_batch
 from src.diffusion.diffusion_utils import get_timestep_embedding
@@ -492,7 +493,7 @@ class LEFTNet(torch.nn.Module):
         edge_frame = torch.cat((edge_diff.unsqueeze(-1), edge_cross.unsqueeze(-1), edge_vertical.unsqueeze(-1)), dim=-1)
         
         del edge_cross, edge_vertical
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         # build node-wise frame
         mean_neighbor_pos = self.mean_neighbor_pos(pos_perturbed, edge_index)
         node_diff = pos_perturbed - mean_neighbor_pos
@@ -504,7 +505,7 @@ class LEFTNet(torch.nn.Module):
         node_frame = torch.cat((node_diff.unsqueeze(-1), node_cross.unsqueeze(-1), node_vertical.unsqueeze(-1)), dim=-1)
 
         del node_cross, node_diff, node_vertical
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         # LSE: local 3D substructure encoding
         # S_i_j shape: (num_nodes, 3, hidden_channels)
         S_i_j = self.S_vector(s, edge_diff.unsqueeze(-1), edge_index, radial_hidden)
@@ -529,7 +530,7 @@ class LEFTNet(torch.nn.Module):
         A_i_j = torch.cat((A_i_j, radial_hidden, radial_emb), dim=-1)
         
         del scalar3, scalar4, scalrization1, scalrization2, S_i_j, perm1, perm2
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         for i in range(self.num_layers):
             # equivariant message passing
             ds, dvec = self.message_layers[i](
@@ -543,13 +544,13 @@ class LEFTNet(torch.nn.Module):
             ds, dvec = self.FTEs[i](s, vec, node_frame)
             s = s + ds
             vec = vec + dvec
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
 
         if self.pos_require_grad:
-            _, pos_gt = self.out_forces(s, vec)
+            _, score = self.out_forces(s, vec)
 
         h = self.embedding_out(s)
-        node_gt = torch.nn.functional.gumbel_softmax(h, tau=1, hard=True, dim=-1)
+        # node_gt = torch.nn.functional.gumbel_softmax(h, tau=1, hard=True, dim=-1)
         if self.regressor_train:
             s = self.last_layer(s)
             s = scatter(s, batch, dim=0)
@@ -557,17 +558,18 @@ class LEFTNet(torch.nn.Module):
             return s
         # node_gt = torch.sum(node_gt * torch.arange(node_gt.size(-1), device=h.device), dim=-1)
         # atomic_gt = self.mapping_block(node_gt)
-        atomic_gt, _ = to_dense_batch(x=node_gt, batch=batch)
-        h = atomic_gt * node_mask.unsqueeze(-1)  #(bs, n, dx)
+        atomic_logits_dense, _ = to_dense_batch(x=h, batch=batch)
+        h = atomic_logits_dense * node_mask.unsqueeze(-1)  #(bs, n, dx)
         # h = h * self.y_std + self.y_mean
-        pos_gt = center_pos(pos_gt, batch)
-        dpos_gt= pos_perturbed + pos_gt
-        pos_gt, _ = to_dense_batch(x=dpos_gt, batch=batch)
+        # pos_gt = center_pos(pos_gt, batch)
+        # dpos_gt= pos_perturbed + pos_gt
+        # pos_gt, _ = to_dense_batch(x=dpos_gt, batch=batch)
         # pos_gt = self.mlp_out_pos(pos_gt, node_mask)
         
-        pos = pos_gt * node_mask.unsqueeze(-1)  #(bs, n, 3)
+        # pos = pos_gt * node_mask.unsqueeze(-1)  #(bs, n, 3)
+        score = utils.remove_mean(score, batch)
     
-        return h, pos
+        return h, score
 
     @property
     def num_params(self):
